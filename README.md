@@ -45,6 +45,13 @@ pip install -e .
 telecode-bot
 ```
 
+## Fast Start Checklist
+
+- Add Telegram token and your numeric user ID into `.env`.
+- Ensure `claude`, `codex`, and `gh` are authenticated in your shell.
+- Start with `source .venv/bin/activate && telecode-bot`.
+- In Telegram, run `/status`, then send plain text to begin coding.
+
 ## Configuration
 
 Set values in `.env`:
@@ -97,4 +104,3 @@ launchctl start com.octaviusp.telecode-bot
 - Safe tool mode default for Claude
 - Per-run timeout (`MAX_RUNTIME_SECONDS`)
 - Run logs persisted for auditing
-
