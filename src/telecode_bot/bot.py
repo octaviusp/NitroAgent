@@ -385,14 +385,16 @@ class TelegramBridgeBot:
         self.store.set_compact_summary(thread_state.thread_key, summary)
         self.store.set_active_session(thread_state.thread_key, None)
 
+        seed_run_ctx = self._create_run_context(thread_state, status.message_id)
         seed_result = await self._execute_engine_capture(
             worker=worker,
             thread_state=thread_state,
-            run_context=self._create_run_context(thread_state, status.message_id),
+            run_context=seed_run_ctx,
             prompt="Memory loaded. Reply exactly MEMORY_READY.",
             force_session_id=None,
             seed_summary=summary,
         )
+        self.store.finish_run(seed_run_ctx.run_id, seed_result.status)
         if seed_result.session_id:
             self.store.set_active_session(thread_state.thread_key, seed_result.session_id)
             self.store.add_session_history(
@@ -503,6 +505,9 @@ class TelegramBridgeBot:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        if process.stdout is None:
+            raise RuntimeError("Failed to capture engine stdout")
+        stdout = process.stdout
         worker.current_process = process
 
         rolling = RollingBuffer(max_chars=self.config.max_output_chars)
@@ -528,7 +533,7 @@ class TelegramBridgeBot:
                     break
 
                 try:
-                    line = await asyncio.wait_for(process.stdout.readline(), timeout=0.5)
+                    line = await asyncio.wait_for(stdout.readline(), timeout=0.5)
                 except TimeoutError:
                     line = b""
 
@@ -606,6 +611,9 @@ class TelegramBridgeBot:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        if process.stdout is None:
+            raise RuntimeError("Failed to capture engine stdout")
+        stdout = process.stdout
         worker.current_process = process
 
         rolling = RollingBuffer(max_chars=12000)
@@ -622,7 +630,7 @@ class TelegramBridgeBot:
                     break
 
                 try:
-                    line = await asyncio.wait_for(process.stdout.readline(), timeout=0.5)
+                    line = await asyncio.wait_for(stdout.readline(), timeout=0.5)
                 except TimeoutError:
                     line = b""
 

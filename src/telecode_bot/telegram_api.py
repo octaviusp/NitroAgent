@@ -21,7 +21,7 @@ class TelegramAPI:
     def __init__(self, token: str) -> None:
         self.base_url = f"https://api.telegram.org/bot{token}"
 
-    def _call(self, method: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    def _call(self, method: str, payload: dict[str, Any], timeout: float) -> object:
         body = json.dumps(payload).encode("utf-8")
         request = Request(
             f"{self.base_url}/{method}",
@@ -39,9 +39,11 @@ class TelegramAPI:
             raise TelegramApiError(f"Network error: {exc.reason}") from exc
 
         parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise TelegramApiError("Malformed Telegram response")
         if not parsed.get("ok"):
             raise TelegramApiError(str(parsed.get("description", "Unknown Telegram error")))
-        return parsed["result"]
+        return parsed.get("result")
 
     def get_updates(self, offset: int | None, timeout_seconds: int) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {
@@ -50,7 +52,14 @@ class TelegramAPI:
         }
         if offset is not None:
             payload["offset"] = offset
-        return self._call("getUpdates", payload, timeout=timeout_seconds + 10.0)
+        result = self._call("getUpdates", payload, timeout=timeout_seconds + 10.0)
+        if not isinstance(result, list):
+            raise TelegramApiError("getUpdates returned non-list payload")
+        updates: list[dict[str, Any]] = []
+        for item in result:
+            if isinstance(item, dict):
+                updates.append(item)
+        return updates
 
     def send_message(
         self,
@@ -66,6 +75,8 @@ class TelegramAPI:
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         result = self._call("sendMessage", payload, timeout=20.0)
+        if not isinstance(result, dict):
+            raise TelegramApiError("sendMessage returned non-object payload")
         return TelegramMessageRef(chat_id=chat_id, message_id=int(result["message_id"]))
 
     def edit_message_text(self, chat_id: int, message_id: int, text: str) -> None:

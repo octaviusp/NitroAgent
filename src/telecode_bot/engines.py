@@ -159,19 +159,19 @@ def _collect_text(node: object, key: str = "") -> list[str]:
         return []
 
     if isinstance(node, list):
-        output: list[str] = []
+        list_output: list[str] = []
         for item in node:
-            output.extend(_collect_text(item, key))
-        return output
+            list_output.extend(_collect_text(item, key))
+        return list_output
 
     if isinstance(node, dict):
-        output: list[str] = []
+        dict_output: list[str] = []
         for child_key, value in node.items():
             if child_key in _TEXT_KEYS and isinstance(value, str):
-                output.append(value)
+                dict_output.append(value)
             else:
-                output.extend(_collect_text(value, child_key))
-        return output
+                dict_output.extend(_collect_text(value, child_key))
+        return dict_output
 
     return []
 

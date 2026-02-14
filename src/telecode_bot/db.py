@@ -241,6 +241,8 @@ class ThreadStore:
                 ),
             )
             self._conn.commit()
+            if cursor.lastrowid is None:
+                raise RuntimeError("Failed to create run record")
             return int(cursor.lastrowid)
 
     def finish_run(self, run_id: int, status: str) -> None:
