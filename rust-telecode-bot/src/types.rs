@@ -48,6 +48,8 @@ pub struct MessageContext {
     pub thread_id: Option<i64>,
     /// Telegram file_id for a voice/audio attachment (downloaded in worker, not poller).
     pub voice_file_id: Option<String>,
+    /// Telegram file_id for a photo attachment (downloaded in worker, not poller).
+    pub photo_file_id: Option<String>,
 }
 
 /// A task enqueued for a thread worker.

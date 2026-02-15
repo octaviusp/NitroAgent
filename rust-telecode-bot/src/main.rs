@@ -125,16 +125,29 @@ async fn main() {
                     let chat_id = msg.chat.id.0;
                     let thread_id = msg.thread_id.map(|tid| tid.0 .0 as i64);
 
-                    // Extract text or voice file_id (download happens in worker)
-                    let (text, voice_file_id) = if let Some(t) = msg.text() {
-                        (t.to_string(), None)
+                    // Extract text, voice file_id, or photo file_id (download happens in worker)
+                    let (text, voice_file_id, photo_file_id) = if let Some(t) = msg.text() {
+                        (t.to_string(), None, None)
                     } else if msg.voice().is_some() || msg.audio().is_some() {
                         let file_id = msg
                             .voice()
                             .map(|v| v.file.id.clone())
                             .or_else(|| msg.audio().map(|a| a.file.id.clone()));
                         match file_id {
-                            Some(id) => ("[voice]".to_string(), Some(id)),
+                            Some(id) => ("[voice]".to_string(), Some(id), None),
+                            None => continue,
+                        }
+                    } else if let Some(sizes) = msg.photo() {
+                        // photo() returns &[PhotoSize] sorted by size — last is highest resolution
+                        let file_id = sizes.last().map(|p| p.file.id.clone());
+                        match file_id {
+                            Some(id) => {
+                                let caption = msg
+                                    .caption()
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_else(|| "[photo]".to_string());
+                                (caption, None, Some(id))
+                            }
                             None => continue,
                         }
                     } else {
@@ -152,6 +165,7 @@ async fn main() {
                             message_id: msg.id.0,
                             thread_id,
                             voice_file_id,
+                            photo_file_id,
                         },
                         command,
                     };

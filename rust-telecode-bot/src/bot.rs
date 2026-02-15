@@ -225,6 +225,52 @@ impl BotCore {
                     return Ok(());
                 }
             }
+        } else if let Some(ref file_id) = task.message.photo_file_id {
+            // Photo: download to workspace → construct prompt instructing Claude to read the file
+            let status = self
+                .send_html(
+                    task.message.chat_id,
+                    task.message.thread_id,
+                    "📷 <b>Downloading image...</b>",
+                )
+                .await?;
+
+            let workspace_path = &thread_state.workspace_path;
+            std::fs::create_dir_all(workspace_path)?;
+
+            let filename = match voice::download_photo(&self.tg, file_id, workspace_path).await {
+                Ok(f) => f,
+                Err(e) => {
+                    self.edit_html(
+                        task.message.chat_id,
+                        status.id.0,
+                        &format!(
+                            "❌ <b>Photo download failed</b>\n<pre>{}</pre>",
+                            html_escape(&e.to_string()),
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            let caption = if task.message.text == "[photo]" {
+                "Describe and analyze this image".to_string()
+            } else {
+                task.message.text.clone()
+            };
+
+            let _ = self
+                .edit_html(
+                    task.message.chat_id,
+                    status.id.0,
+                    "📷 <b>Analyzing image...</b>",
+                )
+                .await;
+
+            format!(
+                "[Attached image: ./{filename} — use the Read tool to view it]\n\n{caption}"
+            )
         } else {
             task.message.text.clone()
         };

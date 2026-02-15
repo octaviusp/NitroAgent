@@ -52,6 +52,29 @@ pub async fn download_voice(
     Ok(TempFileGuard { path: local_path })
 }
 
+// ── Photo download ──
+
+/// Download a photo from Telegram into the workspace directory.
+/// Returns the relative filename (e.g. `_photo_abc123.jpg`) so Claude Code
+/// can access it with a relative path from its working directory.
+pub async fn download_photo(
+    tg: &Bot,
+    file_id: &str,
+    workspace: &std::path::Path,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let file = tg.get_file(file_id).await?;
+
+    let ext = file.path.rsplit('.').next().unwrap_or("jpg");
+    let filename = format!("_photo_{}.{ext}", file.meta.unique_id);
+    let local_path = workspace.join(&filename);
+
+    let mut dst = tokio::fs::File::create(&local_path).await?;
+    tg.download_file(&file.path, &mut dst).await?;
+
+    info!(path = %local_path.display(), "Photo downloaded to workspace");
+    Ok(filename)
+}
+
 // ── Startup checks ──
 
 /// Check if ffmpeg is available on PATH. Call at startup and warn if missing.
