@@ -144,7 +144,23 @@ fn extract_event_text(event: &serde_json::Map<String, Value>) -> String {
             let msg = event.get("message").and_then(|v| v.as_str()).unwrap_or("");
             format!("[warning] {msg}")
         }
-        // assistant, result, system -> skip
+        "result" => {
+            // Extract error messages from failed result events
+            if event
+                .get("is_error")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                if let Some(errors) = event.get("errors").and_then(|v| v.as_array()) {
+                    let msgs: Vec<&str> = errors.iter().filter_map(|v| v.as_str()).collect();
+                    if !msgs.is_empty() {
+                        return format!("[error] {}", msgs.join("; "));
+                    }
+                }
+            }
+            String::new()
+        }
+        // assistant, system -> skip
         _ => String::new(),
     }
 }
@@ -422,5 +438,20 @@ mod tests {
         let result = parse_stream_line("just plain text");
         assert_eq!(result.text, "just plain text");
         assert!(result.session_id.is_none());
+    }
+
+    #[test]
+    fn parse_result_error_extracts_messages() {
+        let line = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: abc-123"],"session_id":"def-456"}"#;
+        let result = parse_stream_line(line);
+        assert!(result.text.contains("No conversation found"));
+        assert_eq!(result.session_id.as_deref(), Some("def-456"));
+    }
+
+    #[test]
+    fn parse_result_success_no_text() {
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"some output","session_id":"abc-123"}"#;
+        let result = parse_stream_line(line);
+        assert!(result.text.is_empty());
     }
 }

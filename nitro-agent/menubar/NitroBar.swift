@@ -9,6 +9,58 @@ private let kPlistSource = "__PLIST_SOURCE__"
 private let kIconPath    = "__ICON_PATH__"
 private let kPlistDest   = NSHomeDirectory() + "/Library/LaunchAgents/\(kLabel).plist"
 private let kLogPath     = kProjectDir + "/logs/daemon-stderr.log"
+private let kLockPath    = "/tmp/com.nitroagent.bar.lock"
+
+// ─── Single-Instance Enforcement ───────────────────────────────────
+
+/// Acquire an exclusive file lock (atomic via flock).
+/// Returns file descriptor on success, -1 if another instance holds the lock.
+/// Lock auto-releases when process exits (even on crash/SIGKILL).
+private func acquireSingleInstanceLock() -> Int32 {
+    let fd = Darwin.open(kLockPath, O_CREAT | O_RDWR, 0644)
+    guard fd >= 0 else { return -1 }
+
+    if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+        ftruncate(fd, 0)
+        let pid = "\(getpid())\n"
+        pid.withCString { ptr in
+            _ = Darwin.write(fd, ptr, strlen(ptr))
+        }
+        return fd
+    }
+    Darwin.close(fd)
+    return -1
+}
+
+/// Kill any running NitroBar instances except ourselves.
+private func terminateExistingInstances() {
+    let myPID = getpid()
+
+    // Cocoa API: terminate by bundle identifier
+    for app in NSRunningApplication.runningApplications(withBundleIdentifier: "com.nitroagent.bar")
+        where app.processIdentifier != myPID {
+        app.terminate()
+    }
+
+    // Unix fallback: pgrep by process name
+    let pipe = Pipe()
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    task.arguments = ["-x", "NitroBar"]
+    task.standardOutput = pipe
+    task.standardError = FileHandle.nullDevice
+    try? task.run()
+    task.waitUntilExit()
+
+    if let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                           encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !output.isEmpty {
+        for pid in output.components(separatedBy: "\n").compactMap({ pid_t($0) })
+            where pid != myPID {
+            kill(pid, SIGTERM)
+        }
+    }
+}
 
 // ─── App Delegate ───────────────────────────────────────────────────
 
@@ -31,9 +83,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Single-instance guard: terminate any older instances
-        terminateOlderInstances()
-
         statusItem = NSStatusBar.system.statusItem(withLength: 28)
         if let btn = statusItem.button, let icon = loadMenuBarIcon() {
             btn.image = icon
@@ -47,37 +96,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Poll status every 5 seconds
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.rebuildMenu()
-        }
-    }
-
-    /// Kill any older NitroBar instances so only this one remains.
-    private func terminateOlderInstances() {
-        let myPID = ProcessInfo.processInfo.processIdentifier
-
-        // Method 1: via bundle identifier (works when launched as .app)
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.nitroagent.bar"
-        for instance in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            where instance.processIdentifier != myPID {
-            instance.terminate()
-        }
-
-        // Method 2: pgrep fallback (covers direct binary launch)
-        let pipe = Pipe()
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-x", "NitroBar"]
-        task.standardOutput = pipe
-        task.standardError = FileHandle.nullDevice
-        try? task.run()
-        task.waitUntilExit()
-
-        if let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                               encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !output.isEmpty {
-            for pid in output.components(separatedBy: "\n").compactMap({ Int32($0) })
-                where pid != myPID {
-                kill(pid, SIGTERM)
-            }
         }
     }
 
@@ -287,6 +305,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
 // ─── Main ───────────────────────────────────────────────────────────
 
+// Enforce single instance via atomic flock BEFORE creating any UI.
+var lockFd = acquireSingleInstanceLock()
+
+if lockFd < 0 {
+    // Lock held by another instance — kill it, wait, retry.
+    terminateExistingInstances()
+    usleep(500_000) // 500ms
+    lockFd = acquireSingleInstanceLock()
+}
+
+guard lockFd >= 0 else {
+    // Another instance survived — yield silently.
+    exit(1)
+}
+
+// Lock acquired — we are the sole instance.
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
