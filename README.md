@@ -1,100 +1,115 @@
-# TeleCode Bot
+<p align="center">
+  <img src="icon.png" width="120" alt="NitroAgent">
+</p>
 
-Telegram bridge for Claude Code (`claude -p`) and Codex CLI (`codex exec`) with per-thread memory,
-streaming message edits, resumable sessions, and local persistence.
+<h1 align="center">NitroAgent</h1>
+
+<p align="center">
+  <b>Ultra-fast Telegram coding agent</b><br>
+  Bridge Claude Code CLI to your phone. Send a message, get code back.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/rust-stable-orange?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/platform-macOS-blue?logo=apple" alt="macOS">
+  <img src="https://img.shields.io/badge/telegram-bot-26A5E4?logo=telegram" alt="Telegram">
+</p>
+
+---
+
+## What is this?
+
+NitroAgent turns your Telegram chat into a full coding environment. Send a text prompt, voice message, or photo — Claude Code executes it on your Mac and streams the result back in real-time with animated feedback.
+
+**No servers. No cloud. Runs on your Mac, talks to your Telegram.**
 
 ## Features
 
-- Telegram long polling (`getUpdates`) no inbound ports required
-- Per-thread/topic memory keyed by `chat_id` + optional `message_thread_id`
-- SQLite-backed thread/session/run store
-- Streaming output via rolling `editMessageText` updates
-- Engine resume support:
-  - Claude: `--resume <session_id>`
-  - Codex: `codex exec resume <session_id> ...`
-- Commands:
-  - `/new_thread`
-  - `/resume <session_id>`
-  - `/clear`
-  - `/compact`
-  - `/cancel`
-  - `/engine <claude|codex>`
-  - `/toolmode <safe|full>`
-  - `/status`
-  - `/publish <repo-name> [private|public]`
-
-## Requirements
-
-- macOS or Linux
-- Python 3.11+
-- Claude Code CLI installed and authenticated
-- Codex CLI installed and authenticated
-- GitHub CLI (`gh`) installed and authenticated for `/publish`
-- Telegram bot token from BotFather
+- **Streaming output** with animated spinner and tool activity strip
+- **Inline keyboards** — Cancel, Retry, New Session with one tap
+- **Voice prompts** — speak your coding instructions (Whisper transcription)
+- **Photo analysis** — send screenshots for Claude to analyze
+- **Session memory** — resume conversations, compact memory across sessions
+- **Shell access** — run commands remotely via `/bash`
+- **Menu bar app** — start/stop/restart from your macOS menu bar
 
 ## Quick Start
 
 ```bash
+# 1. Clone and build
+git clone https://github.com/octaviusp/NitroAgent.git
+cd NitroAgent/nitro-agent
+cargo build --release
+
+# 2. Configure
 cp .env.example .env
-# edit .env with TELEGRAM_BOT_TOKEN and ALLOWED_TELEGRAM_USER_IDS
+# Edit .env — add your TELEGRAM_BOT_TOKEN and ALLOWED_TELEGRAM_USER_IDS
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-telecode-bot
+# 3. Run
+./target/release/nitro-agent
 ```
+
+### Menu Bar App (optional)
+
+```bash
+cd nitro-agent/menubar
+bash install.sh
+```
+
+Red lightning bolt appears in your menu bar. Start/stop the bot, toggle auto-start on login, view logs.
+
+## Commands
+
+| Command | What it does |
+|---------|-------------|
+| `/new` | Fresh session |
+| `/resume` | Resume previous session (tap to select) |
+| `/compact` | Compress memory for long conversations |
+| `/cancel` | Kill running process |
+| `/restart` | Full reset |
+| `/bash <cmd>` | Run shell command on your Mac |
+| `/cd <path>` | Change working directory |
+| `/context` | See token usage, cost, context fill |
+| `/mode <safe\|full>` | Toggle tool permissions |
+
+Or just **send any text** as a coding prompt.
+
+## How It Works
+
+```
+You (Telegram) ──message──▶ NitroAgent (your Mac)
+                                  │
+                                  ▼
+                            claude -p --stream-json
+                                  │
+                                  ▼
+                            Streaming edits ──▶ You (Telegram)
+                            ⠹ Running · #42 · 12s
+                            📖→✏️→🔨→📖
+```
+
+1. Send a message from Telegram
+2. NitroAgent pipes it to Claude Code CLI on your Mac
+3. Streams output back with animated spinner + tool icons
+4. Shows completion card with cost, duration, and action buttons
+
+## Requirements
+
+- macOS (Apple Silicon)
+- Rust toolchain (`rustup`)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- Telegram bot token from [@BotFather](https://t.me/BotFather)
 
 ## Configuration
 
-Set values in `.env`:
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `TELEGRAM_BOT_TOKEN` | yes | — | Bot token from BotFather |
+| `ALLOWED_TELEGRAM_USER_IDS` | yes | — | Your Telegram numeric ID |
+| `DEFAULT_TOOL_MODE` | no | `safe` | `safe` or `full` |
+| `MAX_RUNTIME_SECONDS` | no | `1200` | Per-run timeout |
+| `SST_LANGUAGE` | no | `es` | Whisper language for voice |
 
-- `TELEGRAM_BOT_TOKEN`: bot token
-- `ALLOWED_TELEGRAM_USER_IDS`: comma-separated allowed Telegram numeric user IDs
-- `DEFAULT_ENGINE`: `claude` or `codex`
-- `CLAUDE_SAFE_ALLOWED_TOOLS`: comma list passed into `--allowedTools` in safe mode
-- `DEFAULT_TOOL_MODE`: `safe` or `full`
-- `WORKSPACE_ROOT`, `DB_PATH`, `LOGS_ROOT`
-- `GH_TOKEN` or `GITHUB_TOKEN` for non-interactive GitHub operations
+## License
 
-## Operational Notes
-
-- One run at a time per thread key; later messages queue automatically.
-- `/cancel` terminates the currently running subprocess.
-- `/compact` is bot-level compaction:
-  1. asks current engine for compact structured memory
-  2. stores compact summary in DB
-  3. resets session and seeds a fresh one
-- Telegram output is kept under 4096 chars and continuously edited in place.
-
-## launchd (macOS)
-
-1. Copy plist:
-
-```bash
-mkdir -p ~/Library/LaunchAgents
-cp deploy/launchd/com.octaviusp.telecode-bot.plist ~/Library/LaunchAgents/
-```
-
-2. Edit plist paths/env values if needed.
-
-3. Load service:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.octaviusp.telecode-bot.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.octaviusp.telecode-bot.plist
-launchctl start com.octaviusp.telecode-bot
-```
-
-4. Logs:
-
-- `~/Library/Logs/telecode-bot/stdout.log`
-- `~/Library/Logs/telecode-bot/stderr.log`
-
-## Security Defaults
-
-- User allowlist enforced (`ALLOWED_TELEGRAM_USER_IDS`)
-- Safe tool mode default for Claude
-- Per-run timeout (`MAX_RUNTIME_SECONDS`)
-- Run logs persisted for auditing
-
+MIT
