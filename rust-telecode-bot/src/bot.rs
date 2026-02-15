@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write as _;
 use std::time::Instant;
 
@@ -6,7 +7,7 @@ use teloxide::prelude::*;
 use teloxide::types::ParseMode;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
 use crate::commands::handle_command;
@@ -21,11 +22,18 @@ pub struct BotCore {
     pub config: BotConfig,
     pub store: ThreadStore,
     pub tg: Bot,
+    /// Cached Claude Code metadata per thread (populated from stream-json events).
+    pub info_cache: RwLock<HashMap<String, CachedClaudeInfo>>,
 }
 
 impl BotCore {
     pub fn new(config: BotConfig, store: ThreadStore, tg: Bot) -> Self {
-        Self { config, store, tg }
+        Self {
+            config,
+            store,
+            tg,
+            info_cache: RwLock::new(HashMap::new()),
+        }
     }
 
     /// Process a single incoming task from a worker queue.
@@ -39,7 +47,7 @@ impl BotCore {
         let thread_state = self.store.get_or_create_thread(thread_key.as_str()).await?;
 
         if let Some(ref command) = task.command {
-            // Handle cancel specially -- it needs subprocess access
+            // Cancel — needs subprocess access
             if command.name == "cancel" {
                 let mut proc_guard = current_process.lock().await;
                 if let Some(ref mut child) = *proc_guard {
@@ -47,21 +55,49 @@ impl BotCore {
                     self.send_html(
                         task.message.chat_id,
                         task.message.thread_id,
-                        "<b>Run canceled</b>\nStopping current execution.",
+                        "⏹ <b>Canceled</b>\nProcess terminated.",
                     )
                     .await?;
                 } else {
                     self.send_html(
                         task.message.chat_id,
                         task.message.thread_id,
-                        "<b>No active run</b>\nNothing to cancel.",
+                        "Nothing running.",
                     )
                     .await?;
                 }
                 return Ok(());
             }
 
-            // Handle compact -- requires engine subprocess
+            // Restart — kill process + clear session + clear cache
+            if command.name == "restart" {
+                let mut proc_guard = current_process.lock().await;
+                if let Some(ref mut child) = *proc_guard {
+                    let _ = child.kill().await;
+                }
+                drop(proc_guard);
+
+                self.store
+                    .set_active_session(thread_key.as_str(), None)
+                    .await?;
+                self.store
+                    .set_compact_summary(thread_key.as_str(), None)
+                    .await?;
+                {
+                    let mut cache = self.info_cache.write().await;
+                    cache.remove(thread_key.as_str());
+                }
+
+                self.send_html(
+                    task.message.chat_id,
+                    task.message.thread_id,
+                    "♻️ <b>Restarted</b>\n\nSession cleared.\nReady for new prompts.",
+                )
+                .await?;
+                return Ok(());
+            }
+
+            // Compact — requires engine subprocess
             if command.name == "compact" {
                 return self
                     .handle_compact(
@@ -74,7 +110,7 @@ impl BotCore {
                     .await;
             }
 
-            // Delegate to simple command handlers
+            // Delegate to command handlers (mcp, skills, context, tasks, etc.)
             let handled = handle_command(
                 self,
                 task.message.chat_id,
@@ -89,12 +125,12 @@ impl BotCore {
                 return Ok(());
             }
 
-            // Unhandled subprocess commands: restart, mcps, skills, tasks
+            // Unknown command
             self.send_html(
                 task.message.chat_id,
                 task.message.thread_id,
                 &format!(
-                    "<b>/{}</b> is not yet implemented in the Rust bot.",
+                    "Unknown: <code>/{}</code>\nType /help for commands.",
                     html_escape(&command.name)
                 ),
             )
@@ -124,10 +160,10 @@ impl BotCore {
         current_process: &Mutex<Option<Child>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let status_msg = self
-            .send_text(
+            .send_html(
                 task.message.chat_id,
                 task.message.thread_id,
-                &format!("Running {}...", thread_state.active_engine),
+                "⏳ <b>Running...</b>",
             )
             .await?;
         let status_msg_id = status_msg.id.0;
@@ -151,6 +187,7 @@ impl BotCore {
 
         let result = self
             .execute_engine_stream(
+                thread_key,
                 thread_state,
                 prompt,
                 task.message.chat_id,
@@ -181,21 +218,18 @@ impl BotCore {
             .session_id
             .as_deref()
             .or(thread_state.active_session_id.as_deref())
-            .unwrap_or("unknown");
+            .unwrap_or("—");
 
-        let header = format!(
-            "{icon} <b>{status}</b>\n\
-             Engine: {engine}\n\
-             Run: {run_id}\n\
-             Session: <code>{session}</code>",
+        // Phone-optimized result message
+        let final_html = format!(
+            "{icon} <b>{status}</b>  ·  #{run_id}\n\
+             <code>{session}</code>\n\n\
+             <pre>{body}</pre>",
             icon = result.status.icon(),
-            status = result.status.as_str().to_uppercase(),
-            engine = html_escape(&thread_state.active_engine),
+            status = result.status.label(),
             session = html_escape(sid_display),
+            body = html_escape(&result.output_tail),
         );
-
-        let body = html_escape(&result.output_tail);
-        let final_html = format!("{header}\n\n<pre>{body}</pre>");
         let truncated = truncate_for_telegram(&final_html);
 
         if let Err(e) = self
@@ -214,6 +248,7 @@ impl BotCore {
     #[allow(clippy::too_many_arguments)]
     async fn execute_engine_stream(
         &self,
+        thread_key: &ThreadKey,
         thread_state: &ThreadState,
         prompt: &str,
         chat_id: i64,
@@ -234,7 +269,7 @@ impl BotCore {
         );
 
         // Build clean env (strip Claude Code nesting vars)
-        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let mut env: HashMap<String, String> = std::env::vars().collect();
         for key in &[
             "CLAUDECODE",
             "CLAUDE_CODE_ENTRYPOINT",
@@ -277,7 +312,7 @@ impl BotCore {
             *proc_guard = Some(child);
         }
 
-        // Spawn a task to drain stderr into a shared buffer
+        // Drain stderr into buffer
         let stderr_buf = std::sync::Arc::new(Mutex::new(String::new()));
         let stderr_buf_clone = stderr_buf.clone();
         let stderr_handle = tokio::spawn(async move {
@@ -301,6 +336,10 @@ impl BotCore {
         let edit_interval =
             std::time::Duration::from_secs_f64(self.config.stream_edit_interval_secs);
 
+        // Captured metadata from stream events
+        let mut captured_meta: Option<SessionMeta> = None;
+        let mut captured_usage: Option<UsageInfo> = None;
+
         // Open log file
         if let Some(parent) = log_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -323,7 +362,6 @@ impl BotCore {
         let mut timed_out = false;
 
         loop {
-            // Check timeout
             if start_time.elapsed() > max_runtime {
                 timed_out = true;
                 let mut proc_guard = current_process.lock().await;
@@ -333,7 +371,6 @@ impl BotCore {
                 break;
             }
 
-            // Check cancel
             {
                 let cancelled = *cancel_requested.lock().await;
                 if cancelled {
@@ -345,7 +382,6 @@ impl BotCore {
                 }
             }
 
-            // Read next line with short timeout
             let line =
                 tokio::time::timeout(std::time::Duration::from_millis(500), reader.next_line())
                     .await;
@@ -354,33 +390,40 @@ impl BotCore {
                 Ok(Ok(Some(text))) => {
                     writeln!(log_file, "{text}").ok();
                     let event = parse_stream_line(&text);
+
                     if let Some(sid) = event.session_id {
                         discovered_session_id = Some(sid);
+                    }
+                    if let Some(meta) = event.init_meta {
+                        captured_meta = Some(meta);
+                    }
+                    if let Some(usage) = event.usage {
+                        captured_usage = Some(usage);
                     }
                     if !event.text.is_empty() {
                         rolling.append(&event.text);
                     }
                 }
-                Ok(Ok(None)) => break, // EOF
+                Ok(Ok(None)) => break,
                 Ok(Err(e)) => {
                     warn!("Error reading stdout: {e}");
                     break;
                 }
-                Err(_) => {} // Timeout, continue loop
+                Err(_) => {}
             }
 
-            // Periodic Telegram message edit
+            // Periodic Telegram edit
             if last_edit.elapsed() >= edit_interval {
                 let raw = rolling.value().trim();
                 let display = if raw.is_empty() {
-                    "(waiting for output)"
+                    "(waiting...)"
                 } else {
                     raw
                 };
                 let body = html_escape(display);
+                let elapsed = start_time.elapsed().as_secs();
                 let payload = format!(
-                    "Running {engine} | run {run_id}\n\n<pre>{body}</pre>",
-                    engine = html_escape(&thread_state.active_engine),
+                    "⏳ <b>Running</b>  ·  #{run_id}  ·  {elapsed}s\n\n<pre>{body}</pre>",
                 );
                 let truncated = truncate_for_telegram(&payload);
                 if truncated != last_payload
@@ -395,7 +438,7 @@ impl BotCore {
             }
         }
 
-        // Wait for stderr drain and append to log/buffer
+        // Drain stderr
         let _ = stderr_handle.await;
         {
             let stderr_text = stderr_buf.lock().await;
@@ -420,10 +463,10 @@ impl BotCore {
 
         let cancelled = *cancel_requested.lock().await;
         let status = if timed_out {
-            rolling.append("\n[timeout] Run exceeded configured max runtime.\n");
+            rolling.append("\n[timeout] Max runtime exceeded.\n");
             RunStatus::Failed
         } else if cancelled {
-            rolling.append("\n[canceled] Run canceled by user.\n");
+            rolling.append("\n[canceled] Canceled by user.\n");
             RunStatus::Canceled
         } else if exit_code == 0 {
             RunStatus::Succeeded
@@ -432,9 +475,23 @@ impl BotCore {
             RunStatus::Failed
         };
 
+        // Update metadata cache
+        if captured_meta.is_some() || captured_usage.is_some() {
+            let mut cache = self.info_cache.write().await;
+            let entry = cache
+                .entry(thread_key.as_str().to_string())
+                .or_default();
+            if let Some(meta) = captured_meta {
+                entry.meta = meta;
+            }
+            if let Some(usage) = captured_usage {
+                entry.usage = usage;
+            }
+        }
+
         let output_tail = rolling.value().trim().to_string();
         let output_tail = if output_tail.is_empty() {
-            "(no streamed output)".to_string()
+            "(no output)".to_string()
         } else {
             output_tail
         };
@@ -456,10 +513,10 @@ impl BotCore {
         current_process: &Mutex<Option<Child>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let status_msg = self
-            .send_text(
+            .send_html(
                 task.message.chat_id,
                 task.message.thread_id,
-                "Compacting memory...",
+                "⏳ <b>Compacting memory...</b>",
             )
             .await?;
         let status_msg_id = status_msg.id.0;
@@ -482,6 +539,7 @@ impl BotCore {
 
         let result = self
             .execute_engine_stream(
+                thread_key,
                 thread_state,
                 prompt,
                 task.message.chat_id,
@@ -500,24 +558,21 @@ impl BotCore {
             .await?;
 
         if result.status != RunStatus::Succeeded {
-            self.edit_text(
-                task.message.chat_id,
-                status_msg_id,
-                &format!(
-                    "Compact failed ({}).\n\n{}",
-                    result.status, result.output_tail
-                ),
-            )
-            .await?;
+            let html = format!(
+                "❌ <b>Compact failed</b>\n\n<pre>{}</pre>",
+                html_escape(&result.output_tail)
+            );
+            self.edit_html(task.message.chat_id, status_msg_id, &truncate_for_telegram(&html))
+                .await?;
             return Ok(());
         }
 
         let summary = result.output_tail.trim().to_string();
         if summary.is_empty() {
-            self.edit_text(
+            self.edit_html(
                 task.message.chat_id,
                 status_msg_id,
-                "Compact failed: no summary produced.",
+                "❌ <b>Compact failed</b>\nNo summary produced.",
             )
             .await?;
             return Ok(());
@@ -544,6 +599,7 @@ impl BotCore {
 
         let seed_result = self
             .execute_engine_stream(
+                thread_key,
                 thread_state,
                 "Memory loaded. Reply exactly MEMORY_READY.",
                 task.message.chat_id,
@@ -570,15 +626,19 @@ impl BotCore {
                 .await?;
         }
 
-        let final_text = format!(
-            "Compact complete.\nSummary stored ({} chars).\nSeed session: {}",
+        let final_html = format!(
+            "✅ <b>Compacted</b>\n\n\
+             Memory: {} chars stored\n\
+             Session: <code>{}</code>",
             summary.len(),
-            seed_result
-                .session_id
-                .as_deref()
-                .unwrap_or("created on next message")
+            html_escape(
+                seed_result
+                    .session_id
+                    .as_deref()
+                    .unwrap_or("next message")
+            ),
         );
-        self.edit_text(task.message.chat_id, status_msg_id, &final_text)
+        self.edit_html(task.message.chat_id, status_msg_id, &final_html)
             .await?;
 
         Ok(())
@@ -591,7 +651,7 @@ impl BotCore {
         thread_dir.join(format!("run-{ts}.log"))
     }
 
-    // -- Telegram messaging helpers --
+    // ── Telegram messaging helpers ──
 
     pub async fn send_text(
         &self,
@@ -628,6 +688,7 @@ impl BotCore {
         Ok(req.await?)
     }
 
+    #[allow(dead_code)]
     pub async fn edit_text(
         &self,
         chat_id: i64,
@@ -689,7 +750,7 @@ impl BotCore {
 }
 
 /// Telegram message limit is 4096 chars. Leave room for safety.
-fn truncate_for_telegram(text: &str) -> String {
+pub fn truncate_for_telegram(text: &str) -> String {
     const MAX_LEN: usize = 4000;
     if text.len() <= MAX_LEN {
         text.to_string()
@@ -704,7 +765,7 @@ fn truncate_for_telegram(text: &str) -> String {
     }
 }
 
-fn html_escape(s: &str) -> String {
+pub fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

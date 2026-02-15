@@ -4,7 +4,7 @@ use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use tracing::info;
 
 use crate::config::BotConfig;
-use crate::types::{ThreadSettings, ThreadState};
+use crate::types::{RunInfo, ThreadSettings, ThreadState};
 
 /// SQLite persistence layer for threads, runs, and session history.
 #[derive(Clone)]
@@ -278,6 +278,31 @@ impl ThreadStore {
 
         Ok(rows.into_iter().map(|(sid,)| sid).collect())
     }
+
+    pub async fn recent_runs(
+        &self,
+        thread_key: &str,
+        limit: i64,
+    ) -> Result<Vec<RunInfo>, sqlx::Error> {
+        let rows: Vec<RunInfoRow> = sqlx::query_as(
+            "SELECT id, engine, started_at, ended_at, status FROM runs WHERE thread_key = ? ORDER BY id DESC LIMIT ?",
+        )
+        .bind(thread_key)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| RunInfo {
+                id: r.id,
+                engine: r.engine,
+                started_at: r.started_at,
+                ended_at: r.ended_at,
+                status: r.status,
+            })
+            .collect())
+    }
 }
 
 // Internal query row mapping
@@ -304,6 +329,15 @@ impl ThreadRow {
             settings,
         }
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct RunInfoRow {
+    id: i64,
+    engine: String,
+    started_at: String,
+    ended_at: Option<String>,
+    status: String,
 }
 
 fn utc_now() -> String {

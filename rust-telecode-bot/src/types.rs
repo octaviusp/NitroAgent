@@ -126,9 +126,17 @@ impl RunStatus {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::Succeeded => "OK",
-            Self::Failed => "FAIL",
-            Self::Canceled => "STOP",
+            Self::Succeeded => "✅",
+            Self::Failed => "❌",
+            Self::Canceled => "⏹",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Succeeded => "Done",
+            Self::Failed => "Failed",
+            Self::Canceled => "Canceled",
         }
     }
 }
@@ -145,4 +153,51 @@ pub struct EngineCommand {
     pub args: Vec<String>,
     pub effective_prompt: String,
     pub pipe_stdin: bool,
+}
+
+// ── Claude Code metadata (extracted from stream-json) ──
+
+/// Metadata from the Claude Code `system` init event.
+#[derive(Debug, Clone, Default)]
+pub struct SessionMeta {
+    pub model: String,
+    pub version: String,
+    pub permission_mode: String,
+    pub tools: Vec<String>,
+    pub mcp_servers: Vec<McpServerInfo>,
+    pub skills: Vec<String>,
+    pub agents: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct McpServerInfo {
+    pub name: String,
+    pub status: String,
+}
+
+/// Token usage from a Claude Code `result` event.
+#[derive(Debug, Clone, Default)]
+pub struct UsageInfo {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub total_cost_usd: f64,
+}
+
+/// Combined cached info per thread, populated from stream-json events.
+#[derive(Debug, Clone, Default)]
+pub struct CachedClaudeInfo {
+    pub meta: SessionMeta,
+    pub usage: UsageInfo,
+}
+
+/// Summary of a historical run (for `/tasks` display).
+#[derive(Debug, Clone)]
+pub struct RunInfo {
+    pub id: i64,
+    pub engine: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub status: String,
 }

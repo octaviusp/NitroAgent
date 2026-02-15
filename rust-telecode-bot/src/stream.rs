@@ -1,5 +1,7 @@
 use serde_json::Value;
 
+use crate::types::{McpServerInfo, SessionMeta, UsageInfo};
+
 /// Result of parsing a single stream-json line from Claude CLI.
 #[derive(Debug, Default)]
 pub struct StreamEvent {
@@ -7,6 +9,10 @@ pub struct StreamEvent {
     pub text: String,
     /// Session ID if discovered in this event.
     pub session_id: Option<String>,
+    /// Metadata from system init event (first line of stream).
+    pub init_meta: Option<SessionMeta>,
+    /// Usage info from result event (last line of stream).
+    pub usage: Option<UsageInfo>,
 }
 
 /// Session ID key names to scan for recursively.
@@ -35,7 +41,7 @@ pub fn parse_stream_line(line: &str) -> StreamEvent {
             // Non-JSON line, return as raw text
             return StreamEvent {
                 text: line.to_string(),
-                session_id: None,
+                ..Default::default()
             };
         }
     };
@@ -47,8 +53,26 @@ pub fn parse_stream_line(line: &str) -> StreamEvent {
 
     let session_id = extract_session_id(&parsed);
     let text = extract_event_text(obj);
+    let event_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
-    StreamEvent { text, session_id }
+    let init_meta = if event_type == "system" {
+        parse_init_meta(obj)
+    } else {
+        None
+    };
+
+    let usage = if event_type == "result" {
+        parse_result_usage(obj)
+    } else {
+        None
+    };
+
+    StreamEvent {
+        text,
+        session_id,
+        init_meta,
+        usage,
+    }
 }
 
 /// Extract text content from a stream-json event object.
@@ -148,6 +172,86 @@ fn extract_session_id(value: &Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Extract metadata from a `{"type":"system","subtype":"init",...}` event.
+fn parse_init_meta(event: &serde_json::Map<String, Value>) -> Option<SessionMeta> {
+    let subtype = event.get("subtype").and_then(|v| v.as_str())?;
+    if subtype != "init" {
+        return None;
+    }
+
+    let str_field = |key: &str| -> String {
+        event
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let str_array = |key: &str| -> Vec<String> {
+        event
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let mcp_servers = event
+        .get("mcp_servers")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let obj = v.as_object()?;
+                    Some(McpServerInfo {
+                        name: obj.get("name")?.as_str()?.to_string(),
+                        status: obj.get("status")?.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SessionMeta {
+        model: str_field("model"),
+        version: str_field("claude_code_version"),
+        permission_mode: str_field("permissionMode"),
+        tools: str_array("tools"),
+        mcp_servers,
+        skills: str_array("skills"),
+        agents: str_array("agents"),
+    })
+}
+
+/// Extract usage/cost from a `{"type":"result",...}` event.
+fn parse_result_usage(event: &serde_json::Map<String, Value>) -> Option<UsageInfo> {
+    let usage = event.get("usage").and_then(|v| v.as_object())?;
+    Some(UsageInfo {
+        input_tokens: usage
+            .get("input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        output_tokens: usage
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        cache_read_tokens: usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        cache_creation_tokens: usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        total_cost_usd: event
+            .get("total_cost_usd")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0),
+    })
 }
 
 /// Rolling buffer that keeps the last N characters of appended text.
