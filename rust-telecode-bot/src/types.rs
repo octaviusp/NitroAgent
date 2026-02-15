@@ -186,16 +186,28 @@ pub struct PluginInfo {
 }
 
 /// Token usage from a Claude Code `result` event.
+///
+/// Per-run fields: `input_tokens`, `cache_read_tokens`, `cache_creation_tokens`
+/// reflect the LATEST run (current context fill).
+/// Accumulated fields: `output_tokens_total`, `cost_total`, `num_runs`
+/// grow across runs in the same session.
 #[derive(Debug, Clone, Default)]
 pub struct UsageInfo {
+    /// New input tokens from latest run (usually just the user message).
     pub input_tokens: u64,
-    pub output_tokens: u64,
+    /// Cached tokens read from latest run (system prompt + conversation history).
     pub cache_read_tokens: u64,
+    /// Newly cached tokens from latest run.
     pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    /// From modelUsage.<model>.contextWindow (0 = unknown).
+    /// Accumulated output tokens across all runs in session.
+    pub output_tokens_total: u64,
+    /// Accumulated cost across all runs in session.
+    pub cost_total: f64,
+    /// Number of runs completed in this session.
+    pub num_runs: u64,
+    /// From modelUsage — real context window size (0 = unknown).
     pub context_window: u64,
-    /// From modelUsage.<model>.maxOutputTokens (0 = unknown).
+    /// From modelUsage — real max output tokens (0 = unknown).
     pub max_output_tokens: u64,
 }
 

@@ -148,6 +148,11 @@ async fn handle_new_thread(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bot.store.set_active_session(thread_key, None).await?;
     bot.store.set_compact_summary(thread_key, None).await?;
+    // Reset accumulated usage for fresh session
+    {
+        let mut cache = bot.info_cache.write().await;
+        cache.remove(thread_key);
+    }
     bot.send_html(
         chat_id,
         thread_id,
@@ -210,6 +215,10 @@ async fn handle_clear(
     thread_key: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let fresh = bot.store.clear_thread_state(thread_key).await?;
+    {
+        let mut cache = bot.info_cache.write().await;
+        cache.remove(thread_key);
+    }
     let html = format!(
         "✅ <b>Cleared</b>\n\n\
          Session and memory removed.\n\
@@ -325,17 +334,20 @@ async fn handle_context(
 
 fn format_context_with_data(info: &CachedClaudeInfo, state: &ThreadState) -> String {
     let u = &info.usage;
-    let total_tokens = u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_creation_tokens;
 
-    // Use real context window from modelUsage, fallback to 200k
+    // Context fill = cache_read + cache_creation + input (the full input for latest turn)
+    // This represents how much of the window the current conversation occupies.
+    let context_used = u.cache_read_tokens + u.cache_creation_tokens + u.input_tokens;
+
+    // Real context window from modelUsage, fallback 200k
     let context_window = if u.context_window > 0 {
         u.context_window
     } else {
         200_000
     };
-    let pct = ((total_tokens as f64 / context_window as f64) * 100.0).min(100.0);
+    let pct = ((context_used as f64 / context_window as f64) * 100.0).min(100.0);
 
-    // Build visual bar (10 blocks)
+    // Visual bar (10 blocks)
     let filled = ((pct / 10.0).round() as usize).min(10);
     let bar: String = "█".repeat(filled) + &"░".repeat(10 - filled);
 
@@ -349,25 +361,26 @@ fn format_context_with_data(info: &CachedClaudeInfo, state: &ThreadState) -> Str
         "\
 <b>Context</b>
 
-<code>{bar}</code>  {total}k / {window}k  ({pct:.0}%)
+<code>{bar}</code>  {used}k / {window}k  ({pct:.0}%)
 
-<b>Input</b>       {input} tokens
-<b>Output</b>      {output} tokens
-<b>Cache read</b>  {cache_r}k tokens
-<b>Cache write</b> {cache_w}k tokens
-<b>Cost</b>        ${cost:.4}
+<b>Cached</b>     {cache_r}k read  ·  {cache_w}k write
+<b>Input</b>      {input} tokens (last turn)
+<b>Output</b>     {output}k tokens (total)
+<b>Cost</b>       ${cost:.4} ({runs} run{s})
 
 <b>Model</b>      <code>{model}</code>
 <b>Session</b>    <code>{session}</code>",
         bar = bar,
-        total = total_tokens / 1000,
+        used = context_used / 1000,
         window = context_window / 1000,
         pct = pct,
-        input = u.input_tokens,
-        output = u.output_tokens,
         cache_r = format_k(u.cache_read_tokens),
         cache_w = format_k(u.cache_creation_tokens),
-        cost = u.total_cost_usd,
+        input = u.input_tokens,
+        output = format_k(u.output_tokens_total),
+        cost = u.cost_total,
+        runs = u.num_runs,
+        s = if u.num_runs == 1 { "" } else { "s" },
         model = html_escape(model),
         session = html_escape(state.active_session_id.as_deref().unwrap_or("—")),
     );

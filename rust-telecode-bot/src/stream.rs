@@ -270,13 +270,11 @@ fn parse_result_usage(event: &serde_json::Map<String, Value>) -> Option<UsageInf
         })
         .unwrap_or((0, 0));
 
+    // NOTE: This returns per-run raw data. The caller (bot.rs) handles
+    // accumulation of output_tokens_total, cost_total, and num_runs.
     Some(UsageInfo {
         input_tokens: usage
             .get("input_tokens")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0),
-        output_tokens: usage
-            .get("output_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
         cache_read_tokens: usage
@@ -287,10 +285,16 @@ fn parse_result_usage(event: &serde_json::Map<String, Value>) -> Option<UsageInf
             .get("cache_creation_input_tokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
-        total_cost_usd: event
+        // Per-run output — bot.rs will add this to the running total
+        output_tokens_total: usage
+            .get("output_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0),
+        cost_total: event
             .get("total_cost_usd")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0),
+        num_runs: 1,
         context_window,
         max_output_tokens,
     })

@@ -475,7 +475,7 @@ impl BotCore {
             RunStatus::Failed
         };
 
-        // Update metadata cache
+        // Update metadata cache (accumulate cost/output, latest context fill)
         if captured_meta.is_some() || captured_usage.is_some() {
             let mut cache = self.info_cache.write().await;
             let entry = cache
@@ -484,8 +484,22 @@ impl BotCore {
             if let Some(meta) = captured_meta {
                 entry.meta = meta;
             }
-            if let Some(usage) = captured_usage {
-                entry.usage = usage;
+            if let Some(run_usage) = captured_usage {
+                // Latest context fill (these reflect the current conversation size)
+                entry.usage.input_tokens = run_usage.input_tokens;
+                entry.usage.cache_read_tokens = run_usage.cache_read_tokens;
+                entry.usage.cache_creation_tokens = run_usage.cache_creation_tokens;
+                // Accumulate across runs
+                entry.usage.output_tokens_total += run_usage.output_tokens_total;
+                entry.usage.cost_total += run_usage.cost_total;
+                entry.usage.num_runs += 1;
+                // Update model limits from latest
+                if run_usage.context_window > 0 {
+                    entry.usage.context_window = run_usage.context_window;
+                }
+                if run_usage.max_output_tokens > 0 {
+                    entry.usage.max_output_tokens = run_usage.max_output_tokens;
+                }
             }
         }
 
