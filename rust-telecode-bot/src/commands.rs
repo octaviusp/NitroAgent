@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
 use crate::bot::{html_escape, truncate_for_telegram, BotCore};
 use crate::types::{CachedClaudeInfo, ParsedCommand, ThreadState};
 
@@ -201,16 +203,32 @@ async fn handle_resume(
             )
             .await?;
         } else {
-            let list: String = sessions
+            // Build inline keyboard with one button per session
+            let buttons: Vec<Vec<InlineKeyboardButton>> = sessions
                 .iter()
-                .enumerate()
-                .map(|(i, sid)| format!("{}. <code>{}</code>", i + 1, html_escape(sid)))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let html = format!(
-                "<b>Recent Sessions</b>\n\n{list}\n\n/resume &lt;id&gt; to resume"
-            );
-            bot.send_html(chat_id, thread_id, &html).await?;
+                .map(|sid| {
+                    let label = if sid.len() > 20 {
+                        format!("{}...", &sid[..20])
+                    } else {
+                        sid.clone()
+                    };
+                    vec![InlineKeyboardButton::callback(
+                        label,
+                        format!("resume:{sid}"),
+                    )]
+                })
+                .collect();
+            let keyboard = InlineKeyboardMarkup::new(buttons);
+
+            bot.send_html_kb(
+                chat_id,
+                thread_id,
+                "<b>Recent Sessions</b>\n\nTap to resume:",
+                Some(keyboard),
+                None,
+                false,
+            )
+            .await?;
         }
     }
     Ok(())

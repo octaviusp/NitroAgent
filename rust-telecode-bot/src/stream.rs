@@ -13,6 +13,8 @@ pub struct StreamEvent {
     pub init_meta: Option<SessionMeta>,
     /// Usage info from result event (last line of stream).
     pub usage: Option<UsageInfo>,
+    /// Tool names invoked in this event (from assistant/stream_event).
+    pub tool_names: Vec<String>,
 }
 
 /// Session ID key names to scan for recursively.
@@ -67,11 +69,14 @@ pub fn parse_stream_line(line: &str) -> StreamEvent {
         None
     };
 
+    let tool_names = extract_tool_names(obj, event_type);
+
     StreamEvent {
         text,
         session_id,
         init_meta,
         usage,
+        tool_names,
     }
 }
 
@@ -172,6 +177,50 @@ fn extract_session_id(value: &Value) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// Extract tool names from assistant events and stream_event content_block_start.
+fn extract_tool_names(event: &serde_json::Map<String, Value>, event_type: &str) -> Vec<String> {
+    let mut names = Vec::new();
+
+    match event_type {
+        // Full assistant message: message.content[] with type: "tool_use"
+        "assistant" => {
+            if let Some(content) = event
+                .get("message")
+                .and_then(|v| v.as_object())
+                .and_then(|m| m.get("content"))
+                .and_then(|v| v.as_array())
+            {
+                for item in content {
+                    if let Some(obj) = item.as_object() {
+                        if obj.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            if let Some(name) = obj.get("name").and_then(|v| v.as_str()) {
+                                names.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Streaming: content_block_start with content_block.type == "tool_use"
+        "stream_event" => {
+            if let Some(inner) = event.get("event").and_then(|v| v.as_object()) {
+                if inner.get("type").and_then(|v| v.as_str()) == Some("content_block_start") {
+                    if let Some(cb) = inner.get("content_block").and_then(|v| v.as_object()) {
+                        if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            if let Some(name) = cb.get("name").and_then(|v| v.as_str()) {
+                                names.push(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    names
 }
 
 /// Extract metadata from a `{"type":"system","subtype":"init",...}` event.

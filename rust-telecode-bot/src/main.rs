@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod db;
 mod engine;
+mod format;
 mod stream;
 #[allow(dead_code)]
 mod types;
@@ -12,7 +13,7 @@ mod worker;
 use std::sync::Arc;
 
 use teloxide::prelude::*;
-use teloxide::types::UpdateKind;
+use teloxide::types::{MaybeInaccessibleMessage, UpdateKind};
 use tracing::{error, info, warn};
 
 use crate::bot::BotCore;
@@ -106,6 +107,132 @@ async fn main() {
             Ok(updates) => {
                 for update in updates {
                     offset = Some(update.id.0 as i32 + 1);
+
+                    // Handle callback queries (inline keyboard buttons)
+                    if let UpdateKind::CallbackQuery(ref cq) = update.kind {
+                        // Access control
+                        if !allowed_user_ids.contains(&cq.from.id.0) {
+                            continue;
+                        }
+
+                        let data = match &cq.data {
+                            Some(d) => d.clone(),
+                            None => continue,
+                        };
+
+                        // Extract chat_id and thread_id from the message
+                        let (cb_chat_id, cb_thread_id) = match &cq.message {
+                            Some(MaybeInaccessibleMessage::Regular(ref msg)) => {
+                                let tid = msg.thread_id.map(|t| t.0 .0 as i64);
+                                (msg.chat.id.0, tid)
+                            }
+                            _ => continue,
+                        };
+
+                        // Answer callback query to dismiss loading spinner
+                        let _ = tg.answer_callback_query(&cq.id).await;
+
+                        let thread_key = ThreadKey::new(cb_chat_id, cb_thread_id);
+
+                        match data.as_str() {
+                            "cancel" => {
+                                let worker = registry.get_or_create(&thread_key).await;
+                                let cancelled = worker.cancel_current().await;
+                                if !cancelled {
+                                    let _ = bot_core
+                                        .send_html(cb_chat_id, cb_thread_id, "Nothing running.")
+                                        .await;
+                                }
+                            }
+                            "new" => {
+                                let _ = bot_core.store.set_active_session(thread_key.as_str(), None).await;
+                                let _ = bot_core.store.set_compact_summary(thread_key.as_str(), None).await;
+                                {
+                                    let mut cache = bot_core.info_cache.write().await;
+                                    cache.remove(thread_key.as_str());
+                                }
+                                let _ = bot_core
+                                    .send_html(
+                                        cb_chat_id,
+                                        cb_thread_id,
+                                        "✅ <b>Fresh session</b>\nReady for new prompts.",
+                                    )
+                                    .await;
+                            }
+                            "restart" => {
+                                let worker = registry.get_or_create(&thread_key).await;
+                                let _ = worker.cancel_current().await;
+                                let _ = bot_core.store.set_active_session(thread_key.as_str(), None).await;
+                                let _ = bot_core.store.set_compact_summary(thread_key.as_str(), None).await;
+                                {
+                                    let mut cache = bot_core.info_cache.write().await;
+                                    cache.remove(thread_key.as_str());
+                                }
+                                let _ = bot_core
+                                    .send_html(
+                                        cb_chat_id,
+                                        cb_thread_id,
+                                        "♻️ <b>Restarted</b>\nSession cleared. Ready for new prompts.",
+                                    )
+                                    .await;
+                            }
+                            "retry" => {
+                                // Retrieve last prompt from info cache
+                                let last_prompt = {
+                                    let cache = bot_core.info_cache.read().await;
+                                    cache
+                                        .get(thread_key.as_str())
+                                        .and_then(|i| i.last_prompt.clone())
+                                };
+                                if let Some(prompt) = last_prompt {
+                                    let task = IncomingTask {
+                                        message: MessageContext {
+                                            chat_id: cb_chat_id,
+                                            user_id: cq.from.id.0,
+                                            text: prompt,
+                                            message_id: 0,
+                                            thread_id: cb_thread_id,
+                                            voice_file_id: None,
+                                            photo_file_id: None,
+                                        },
+                                        command: None,
+                                    };
+                                    let worker = registry.get_or_create(&thread_key).await;
+                                    if let Err(e) = worker.enqueue(task) {
+                                        error!("Failed to enqueue retry: {e}");
+                                    }
+                                } else {
+                                    let _ = bot_core
+                                        .send_html(
+                                            cb_chat_id,
+                                            cb_thread_id,
+                                            "No previous prompt to retry.",
+                                        )
+                                        .await;
+                                }
+                            }
+                            d if d.starts_with("resume:") => {
+                                let sid = &d[7..];
+                                let _ = bot_core
+                                    .store
+                                    .set_active_session(thread_key.as_str(), Some(sid))
+                                    .await;
+                                let _ = bot_core
+                                    .send_html(
+                                        cb_chat_id,
+                                        cb_thread_id,
+                                        &format!(
+                                            "✅ <b>Session resumed</b>\n<code>{}</code>",
+                                            crate::bot::html_escape(sid)
+                                        ),
+                                    )
+                                    .await;
+                            }
+                            _ => {}
+                        }
+
+                        continue;
+                    }
 
                     let msg = match &update.kind {
                         UpdateKind::Message(m) => m,

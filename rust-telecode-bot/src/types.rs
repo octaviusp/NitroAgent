@@ -110,6 +110,7 @@ pub struct RunResult {
     pub output_tail: String,
     pub session_id: Option<String>,
     pub exit_code: i32,
+    pub elapsed_secs: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -220,6 +221,8 @@ pub struct UsageInfo {
 pub struct CachedClaudeInfo {
     pub meta: SessionMeta,
     pub usage: UsageInfo,
+    /// Last prompt text (for retry).
+    pub last_prompt: Option<String>,
 }
 
 /// Summary of a historical run (for `/tasks` display).

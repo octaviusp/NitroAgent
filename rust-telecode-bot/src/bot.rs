@@ -4,7 +4,9 @@ use std::time::Instant;
 
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{
+    ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode, ReplyParameters,
+};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::{Mutex, RwLock};
@@ -14,9 +16,13 @@ use crate::commands::handle_command;
 use crate::config::BotConfig;
 use crate::db::ThreadStore;
 use crate::engine::build_claude_command;
+use crate::format;
 use crate::stream::{parse_stream_line, RollingBuffer};
 use crate::types::*;
 use crate::voice;
+
+/// Braille spinner frames for animated streaming indicator.
+const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Core bot logic shared across workers.
 pub struct BotCore {
@@ -39,6 +45,46 @@ impl BotCore {
             info_cache: RwLock::new(HashMap::new()),
             voice: voice_transcriber,
         }
+    }
+
+    /// Map a Claude tool name to an emoji icon.
+    fn tool_icon(name: &str) -> &'static str {
+        match name {
+            "Read" | "NotebookRead" => "📖",
+            "Edit" | "NotebookEdit" => "✏️",
+            "Write" => "📝",
+            "Bash" | "BashOutput" | "KillShell" => "🔨",
+            "Grep" => "🔍",
+            "Glob" | "LS" => "📂",
+            "WebFetch" | "WebSearch" => "🌐",
+            "Task" => "👥",
+            "TodoWrite" | "TodoRead" => "📋",
+            _ => "🔧",
+        }
+    }
+
+    /// Build inline keyboard for a completed successful run.
+    fn run_success_keyboard() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("🆕 New", "new"),
+            InlineKeyboardButton::callback("🔄 Retry", "retry"),
+        ]])
+    }
+
+    /// Build inline keyboard for a failed run.
+    fn run_failed_keyboard() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("♻️ Restart", "restart"),
+            InlineKeyboardButton::callback("🆕 New", "new"),
+        ]])
+    }
+
+    /// Build inline keyboard with cancel button.
+    fn cancel_keyboard() -> InlineKeyboardMarkup {
+        InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+            "⏹ Cancel",
+            "cancel",
+        )]])
     }
 
     /// Process a single incoming task from a worker queue.
@@ -295,11 +341,33 @@ impl BotCore {
         cancel_requested: &Mutex<bool>,
         current_process: &Mutex<Option<Child>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Store last prompt for retry
+        {
+            let mut cache = self.info_cache.write().await;
+            let entry = cache
+                .entry(thread_key.as_str().to_string())
+                .or_default();
+            entry.last_prompt = Some(prompt.to_string());
+        }
+
+        // Typing indicator
+        let _ = self
+            .tg
+            .send_chat_action(ChatId(task.message.chat_id), ChatAction::Typing)
+            .await;
+
+        // Initial status message (reply to user's message, silent, with cancel button)
         let status_msg = self
-            .send_html(
+            .send_html_kb(
                 task.message.chat_id,
                 task.message.thread_id,
-                "⏳ <b>Running...</b>",
+                &format!(
+                    "{} <b>Running...</b>",
+                    SPINNER[0]
+                ),
+                Some(Self::cancel_keyboard()),
+                Some(task.message.message_id),
+                true,
             )
             .await?;
         let status_msg_id = status_msg.id.0;
@@ -356,25 +424,103 @@ impl BotCore {
             .or(thread_state.active_session_id.as_deref())
             .unwrap_or("—");
 
-        // Phone-optimized result message
+        // Build completion summary with cost/duration/context bar
+        let elapsed = result.elapsed_secs;
+        let (cost_str, bar_str) = {
+            let cache = self.info_cache.read().await;
+            let info = cache.get(thread_key.as_str());
+            let cost = info
+                .map(|i| format!("${:.4}", i.usage.cost_total))
+                .unwrap_or_default();
+            let bar = info
+                .map(|i| {
+                    let u = &i.usage;
+                    let used = u.cache_read_tokens + u.cache_creation_tokens + u.input_tokens;
+                    let window = if u.context_window > 0 {
+                        u.context_window
+                    } else {
+                        200_000
+                    };
+                    let pct = ((used as f64 / window as f64) * 100.0).min(100.0);
+                    let filled = ((pct / 10.0).round() as usize).min(10);
+                    format!(
+                        "<code>{}{}</code> {:.0}%",
+                        "█".repeat(filled),
+                        "░".repeat(10 - filled),
+                        pct
+                    )
+                })
+                .unwrap_or_default();
+            (cost, bar)
+        };
+
+        // Convert markdown output to Telegram HTML (only for final message)
+        let body_html = format::md_to_telegram_html(&result.output_tail);
+
+        let cost_segment = if !cost_str.is_empty() {
+            format!("  ·  {cost_str}")
+        } else {
+            String::new()
+        };
+
+        let bar_segment = if !bar_str.is_empty() {
+            format!("\n{bar_str}")
+        } else {
+            String::new()
+        };
+
+        let hint = match result.status {
+            RunStatus::Failed => "\n\n<i>Try /restart or /new to reset.</i>",
+            _ => "",
+        };
+
         let final_html = format!(
-            "{icon} <b>{status}</b>  ·  #{run_id}\n\
+            "{icon} <b>{status}</b>  ·  #{run_id}  ·  {elapsed}s{cost}\
+             {bar}\n\
              <code>{session}</code>\n\n\
-             <pre>{body}</pre>",
+             {body}{hint}",
             icon = result.status.icon(),
             status = result.status.label(),
+            cost = cost_segment,
+            bar = bar_segment,
             session = html_escape(sid_display),
-            body = html_escape(&result.output_tail),
+            body = body_html,
         );
-        let truncated = truncate_for_telegram(&final_html);
 
-        if let Err(e) = self
-            .edit_html(task.message.chat_id, status_msg_id, &truncated)
-            .await
-        {
-            warn!("Failed to edit final message: {e}");
+        // Split long messages
+        let chunks = format::split_for_telegram(&final_html, 4000);
+        let keyboard = match result.status {
+            RunStatus::Succeeded => Some(Self::run_success_keyboard()),
+            RunStatus::Failed => Some(Self::run_failed_keyboard()),
+            RunStatus::Canceled => Some(Self::run_failed_keyboard()),
+        };
+
+        if let Some(first) = chunks.first() {
+            let kb = if chunks.len() == 1 { keyboard.clone() } else { None };
+            if let Err(e) = self
+                .edit_html_kb(task.message.chat_id, status_msg_id, first, kb)
+                .await
+            {
+                warn!("Failed to edit final message: {e}");
+                let _ = self
+                    .send_html(task.message.chat_id, task.message.thread_id, first)
+                    .await;
+            }
+        }
+
+        // Send remaining chunks as new messages (last one gets keyboard)
+        for (i, chunk) in chunks.iter().skip(1).enumerate() {
+            let is_last = i == chunks.len() - 2;
+            let kb = if is_last { keyboard.clone() } else { None };
             let _ = self
-                .send_html(task.message.chat_id, task.message.thread_id, &truncated)
+                .send_html_kb(
+                    task.message.chat_id,
+                    task.message.thread_id,
+                    chunk,
+                    kb,
+                    None,
+                    false,
+                )
                 .await;
         }
 
@@ -472,6 +618,13 @@ impl BotCore {
         let edit_interval =
             std::time::Duration::from_secs_f64(self.config.stream_edit_interval_secs);
 
+        // Animated spinner state
+        let mut spinner_idx: usize = 0;
+        // Tool activity strip (icons of tools used)
+        let mut tool_icons: Vec<&str> = Vec::new();
+        // Typing indicator re-send timer
+        let mut last_typing = Instant::now();
+
         // Captured metadata from stream events
         let mut captured_meta: Option<SessionMeta> = None;
         let mut captured_usage: Option<UsageInfo> = None;
@@ -539,6 +692,14 @@ impl BotCore {
                     if !event.text.is_empty() {
                         rolling.append(&event.text);
                     }
+                    // Collect tool icons
+                    for name in &event.tool_names {
+                        tool_icons.push(Self::tool_icon(name));
+                        // Cap to last 15 tools
+                        if tool_icons.len() > 15 {
+                            tool_icons.remove(0);
+                        }
+                    }
                 }
                 Ok(Ok(None)) => break,
                 Ok(Err(e)) => {
@@ -546,6 +707,15 @@ impl BotCore {
                     break;
                 }
                 Err(_) => {}
+            }
+
+            // Re-send typing indicator every 4s (expires after 5s)
+            if last_typing.elapsed() >= std::time::Duration::from_secs(4) {
+                let _ = self
+                    .tg
+                    .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+                    .await;
+                last_typing = Instant::now();
             }
 
             // Periodic Telegram edit
@@ -558,16 +728,29 @@ impl BotCore {
                 };
                 let body = html_escape(display);
                 let elapsed = start_time.elapsed().as_secs();
+                let spinner = SPINNER[spinner_idx % SPINNER.len()];
+                spinner_idx += 1;
+
+                let tool_strip = if tool_icons.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{}", tool_icons.join("→"))
+                };
+
                 let payload = format!(
-                    "⏳ <b>Running</b>  ·  #{run_id}  ·  {elapsed}s\n\n<pre>{body}</pre>",
+                    "{spinner} <b>Running</b>  ·  #{run_id}  ·  {elapsed}s\
+                     {tool_strip}\n\n<pre>{body}</pre>",
                 );
                 let truncated = truncate_for_telegram(&payload);
-                if truncated != last_payload
-                    && self
-                        .edit_html(chat_id, status_msg_id, &truncated)
-                        .await
-                        .is_ok()
-                {
+                if truncated != last_payload {
+                    let _ = self
+                        .edit_html_kb(
+                            chat_id,
+                            status_msg_id,
+                            &truncated,
+                            Some(Self::cancel_keyboard()),
+                        )
+                        .await;
                     last_payload = truncated;
                 }
                 last_edit = Instant::now();
@@ -651,6 +834,7 @@ impl BotCore {
             output_tail,
             session_id: discovered_session_id,
             exit_code,
+            elapsed_secs: start_time.elapsed().as_secs(),
         })
     }
 
@@ -1049,6 +1233,66 @@ impl BotCore {
             .await;
 
         match result {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string().to_lowercase();
+                if msg.contains("message is not modified") {
+                    Ok(())
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
+    }
+
+    /// Send HTML message with optional inline keyboard, reply-to, and silent mode.
+    pub async fn send_html_kb(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i64>,
+        html: &str,
+        keyboard: Option<InlineKeyboardMarkup>,
+        reply_to: Option<i32>,
+        silent: bool,
+    ) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
+        let truncated = truncate_for_telegram(html);
+        let mut req = self
+            .tg
+            .send_message(ChatId(chat_id), &truncated)
+            .parse_mode(ParseMode::Html);
+        if let Some(tid) = thread_id {
+            req = req.message_thread_id(teloxide::types::ThreadId(MessageId(tid as i32)));
+        }
+        if let Some(kb) = keyboard {
+            req = req.reply_markup(kb);
+        }
+        if let Some(rid) = reply_to {
+            req = req.reply_parameters(ReplyParameters::new(MessageId(rid)));
+        }
+        if silent {
+            req = req.disable_notification(true);
+        }
+        Ok(req.await?)
+    }
+
+    /// Edit HTML message with optional inline keyboard.
+    pub async fn edit_html_kb(
+        &self,
+        chat_id: i64,
+        message_id: i32,
+        html: &str,
+        keyboard: Option<InlineKeyboardMarkup>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let truncated = truncate_for_telegram(html);
+        let mut req = self
+            .tg
+            .edit_message_text(ChatId(chat_id), MessageId(message_id), &truncated)
+            .parse_mode(ParseMode::Html);
+        if let Some(kb) = keyboard {
+            req = req.reply_markup(kb);
+        }
+
+        match req.await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string().to_lowercase();
