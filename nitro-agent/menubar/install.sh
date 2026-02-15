@@ -10,6 +10,8 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 PLIST_SOURCE="$SCRIPT_DIR/com.nitroagent.bot.plist"
+ICON_SOURCE="$SCRIPT_DIR/icon.png"
+ICON_DEST="$RESOURCES_DIR/icon.png"
 
 echo "==> NitroAgent Menu Bar Installer"
 echo "    Project: $PROJECT_DIR"
@@ -30,6 +32,7 @@ sed \
     -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
     -e "s|__BINARY_PATH__|$BINARY_PATH|g" \
     -e "s|__PLIST_SOURCE__|$PLIST_SOURCE|g" \
+    -e "s|__ICON_PATH__|$ICON_DEST|g" \
     -e "s|__HOME_DIR__|$HOME|g" \
     "$SWIFT_SRC" > "$SWIFT_TMP"
 
@@ -47,6 +50,10 @@ swiftc \
 rm -f "$SWIFT_TMP"
 echo "    Compiled: $MACOS_DIR/NitroBar"
 
+# ─── Copy icon to Resources ─────────────────────────────────────────
+cp "$ICON_SOURCE" "$ICON_DEST"
+echo "    Icon: $ICON_DEST"
+
 # ─── Info.plist for the .app bundle ──────────────────────────────────
 cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -61,6 +68,8 @@ cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
     <string>NitroBar</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
+    <key>CFBundleIconFile</key>
+    <string>icon.png</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSBackgroundOnly</key>
@@ -107,7 +116,7 @@ echo ""
 echo "==> NitroBar launched via launchctl"
 
 echo ""
-echo "Done! Look for 'TC' in your menu bar (top-right)."
+echo "Done! Look for the red lightning bolt in your menu bar."
 echo ""
 echo "From the menu bar you can:"
 echo "  - Start/Stop the bot"

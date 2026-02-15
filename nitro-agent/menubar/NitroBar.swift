@@ -6,6 +6,7 @@ private let kLabel       = "com.nitroagent.bot"
 private let kProjectDir  = "__PROJECT_DIR__"
 private let kBinaryPath  = "__BINARY_PATH__"
 private let kPlistSource = "__PLIST_SOURCE__"
+private let kIconPath    = "__ICON_PATH__"
 private let kPlistDest   = NSHomeDirectory() + "/Library/LaunchAgents/\(kLabel).plist"
 private let kLogPath     = kProjectDir + "/logs/daemon-stderr.log"
 
@@ -15,10 +16,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
 
+    /// Load and resize icon for menu bar (18x18pt).
+    private func loadMenuBarIcon() -> NSImage? {
+        guard let img = NSImage(contentsOfFile: kIconPath) else { return nil }
+        let size = NSSize(width: 18, height: 18)
+        let resized = NSImage(size: size)
+        resized.lockFocus()
+        img.draw(in: NSRect(origin: .zero, size: size),
+                 from: NSRect(origin: .zero, size: img.size),
+                 operation: .copy, fraction: 1.0)
+        resized.unlockFocus()
+        resized.isTemplate = false  // keep original colors (red lightning)
+        return resized
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: 28)
-        if let btn = statusItem.button {
-            btn.title = "\u{1F916}"  // robot face emoji
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let btn = statusItem.button, let icon = loadMenuBarIcon() {
+            btn.image = icon
+            btn.imagePosition = .imageOnly
+        } else if let btn = statusItem.button {
+            btn.title = "⚡"  // fallback
         }
 
         rebuildMenu()
@@ -76,9 +94,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.statusItem.menu = menu
 
-        // Update icon based on status
+        // Update icon opacity based on status (full = running, dimmed = stopped)
         if let btn = self.statusItem.button {
-            btn.title = running ? "\u{1F916}" : "\u{1F6D1}"  // robot vs stop sign
+            btn.alphaValue = running ? 1.0 : 0.4
         }
     }
 
