@@ -1,137 +1,86 @@
-# TeleCode Bot
+# NitroAgent
 
-Telegram bridge for Claude Code (`claude -p`) and Codex CLI (`codex exec`) with per-thread memory,
-streaming message edits, resumable sessions, and local persistence.
+Ultra-fast optimized macOS remote-agent to code with Telegram. Rust-powered bridge to Claude Code CLI with streaming output, inline keyboards, and rich UI.
 
 ## Features
 
-- Telegram long polling (`getUpdates`) no inbound ports required
-- Per-thread/topic memory keyed by `chat_id` + optional `message_thread_id`
-- SQLite-backed thread/session/run store
-- Streaming output via rolling `editMessageText` updates
-- Engine resume support:
-  - Claude: `--resume <session_id>`
-  - Codex: `codex exec resume <session_id> ...`
-- Commands:
-  - `/start`
-  - `/help`
-  - `/new_thread`
-  - `/resume <session_id>`
-  - `/clear`
-  - `/compact`
-  - `/cancel`
-  - `/engine <claude|codex>`
-  - `/toolmode <safe|full>`
-  - `/status`
-  - `/publish <repo-name> [private|public]`
+- Telegram long polling (`getUpdates`) — no inbound ports required
+- Per-thread/topic isolation keyed by `chat_id` + optional `topic_id`
+- SQLite-backed thread/session/run persistence
+- Streaming output via animated spinner + rolling `editMessageText` updates
+- Real-time tool activity strip (📖→✏️→🔨) shows what Claude is doing
+- Inline keyboards: Cancel during execution, New/Retry/Restart on completion
+- Session resume with tappable inline buttons
+- Markdown-to-HTML rendering for final output
+- Message splitting for long responses (>4000 chars)
+- Voice/audio transcription via Whisper (sst.py)
+- Photo analysis via Claude Code multimodal Read tool
+- macOS menu bar app for daemon management
 
 ## Requirements
 
-- macOS or Linux
-- Python 3.11+
+- macOS (Apple Silicon)
+- Rust toolchain
 - Claude Code CLI installed and authenticated
-- Codex CLI installed and authenticated
-- GitHub CLI (`gh`) installed and authenticated for `/publish`
 - Telegram bot token from BotFather
 
 ## Quick Start
 
 ```bash
+cd nitro-agent
+cargo build --release
+
 cp .env.example .env
 # edit .env with TELEGRAM_BOT_TOKEN and ALLOWED_TELEGRAM_USER_IDS
 
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-telecode-bot
+./target/release/nitro-agent
 ```
 
-## Fast Start Checklist
+## Menu Bar App
 
-- Add Telegram token and your numeric user ID into `.env`.
-- Ensure `claude`, `codex`, and `gh` are authenticated in your shell.
-- Start with `source .venv/bin/activate && telecode-bot`.
-- In Telegram, run `/status`, then send plain text to begin coding.
+```bash
+cd nitro-agent/menubar
+bash install.sh
+```
+
+From the menu bar you can start/stop/restart the bot, toggle auto-start on login, and view logs.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Show bot info |
+| `/help` | List all commands |
+| `/new` | Fresh session |
+| `/resume [id]` | Resume session (inline buttons) |
+| `/clear` | Full reset |
+| `/compact` | Compress memory |
+| `/cancel` | Kill running process |
+| `/restart` | Reset Claude Code |
+| `/bash <cmd>` | Run shell command |
+| `/cd [path]` | Show or change workspace |
+| `/status` | Thread state |
+| `/context` | Token usage + cost |
+| `/mcp` | MCP servers |
+| `/skills` | Available skills |
+| `/tasks` | Recent runs |
+| `/mode <safe\|full>` | Tool permissions |
 
 ## Configuration
 
 Set values in `.env`:
 
-- `TELEGRAM_BOT_TOKEN`: bot token
-- `ALLOWED_TELEGRAM_USER_IDS`: comma-separated allowed Telegram numeric user IDs
-- `ALLOWED_TELEGRAM_CHAT_IDS`: optional comma list for extra chat-level lock
-- `BLOCK_NON_PRIVATE_CHATS`: when true, reject all non-private chats
-- `DEFAULT_ENGINE`: `claude` or `codex`
-- `CLAUDE_SAFE_ALLOWED_TOOLS`: comma list passed into `--allowedTools` in safe mode
-- `DEFAULT_TOOL_MODE`: `safe` or `full`
-- `WORKSPACE_ROOT`, `DB_PATH`, `LOGS_ROOT`
-- `TELEGRAM_CA_BUNDLE`: optional custom CA bundle file path
-- `GH_TOKEN` or `GITHUB_TOKEN` for non-interactive GitHub operations
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `TELEGRAM_BOT_TOKEN` | required | Telegram bot token |
+| `ALLOWED_TELEGRAM_USER_IDS` | required | Comma-separated numeric IDs |
+| `DEFAULT_TOOL_MODE` | `safe` | `safe` or `full` |
+| `MAX_RUNTIME_SECONDS` | `1200` | Per-run timeout |
+| `STREAM_EDIT_INTERVAL_SECONDS` | `0.7` | Telegram edit frequency |
 
-## Professional Bot Setup
-
-1. Configure Telegram bot profile metadata and command menu:
-
-```bash
-python3 scripts/configure_telegram_bot.py
-```
-
-2. Generate avatar image files from SVG:
-
-```bash
-./scripts/export_avatar_image.sh
-```
-
-3. Print BotFather hardening steps and execute them in `@BotFather`:
-
-```bash
-python3 scripts/print_botfather_private_setup.py
-```
-
-Reference asset:
-
-- `assets/private-coder-bot.svg`
-
-## Operational Notes
-
-- One run at a time per thread key; later messages queue automatically.
-- `/cancel` terminates the currently running subprocess.
-- `/compact` is bot-level compaction:
-  1. asks current engine for compact structured memory
-  2. stores compact summary in DB
-  3. resets session and seeds a fresh one
-- Telegram output is kept under 4096 chars and continuously edited in place.
-
-## launchd (macOS)
-
-1. Copy plist:
-
-```bash
-mkdir -p ~/Library/LaunchAgents
-cp deploy/launchd/com.octaviusp.telecode-bot.plist ~/Library/LaunchAgents/
-```
-
-2. Edit plist paths/env values if needed.
-
-3. Load service:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.octaviusp.telecode-bot.plist 2>/dev/null || true
-launchctl load ~/Library/LaunchAgents/com.octaviusp.telecode-bot.plist
-launchctl start com.octaviusp.telecode-bot
-```
-
-4. Logs:
-
-- `~/Library/Logs/telecode-bot/stdout.log`
-- `~/Library/Logs/telecode-bot/stderr.log`
-
-## Security Defaults
+## Security
 
 - User allowlist enforced (`ALLOWED_TELEGRAM_USER_IDS`)
-- Optional chat allowlist (`ALLOWED_TELEGRAM_CHAT_IDS`)
-- Optional private-chat-only enforcement (`BLOCK_NON_PRIVATE_CHATS=true`)
-- Safe tool mode default for Claude
-- Per-run timeout (`MAX_RUNTIME_SECONDS`)
+- Safe tool mode by default (restricted Claude tool access)
+- Per-run timeout with automatic process termination
 - Run logs persisted for auditing

@@ -4,14 +4,14 @@ set -euo pipefail
 # ─── Resolve paths ───────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-BINARY_PATH="$PROJECT_DIR/target/release/rust-telecode-bot"
-APP_DIR="$HOME/Applications/TeleCodeBar.app"
+BINARY_PATH="$PROJECT_DIR/target/release/nitro-agent"
+APP_DIR="$HOME/Applications/NitroBar.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
-PLIST_SOURCE="$SCRIPT_DIR/com.telecode.bot.plist"
+PLIST_SOURCE="$SCRIPT_DIR/com.nitroagent.bot.plist"
 
-echo "==> TeleCode Menu Bar Installer"
+echo "==> NitroAgent Menu Bar Installer"
 echo "    Project: $PROJECT_DIR"
 echo "    Binary:  $BINARY_PATH"
 echo ""
@@ -23,8 +23,8 @@ if [ ! -f "$BINARY_PATH" ]; then
 fi
 
 # ─── Substitute paths in Swift source ────────────────────────────────
-SWIFT_SRC="$SCRIPT_DIR/TeleCodeBar.swift"
-SWIFT_TMP="$SCRIPT_DIR/.TeleCodeBar_resolved.swift"
+SWIFT_SRC="$SCRIPT_DIR/NitroBar.swift"
+SWIFT_TMP="$SCRIPT_DIR/.NitroBar_resolved.swift"
 
 sed \
     -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
@@ -34,18 +34,18 @@ sed \
     "$SWIFT_SRC" > "$SWIFT_TMP"
 
 # ─── Compile ─────────────────────────────────────────────────────────
-echo "==> Compiling TeleCodeBar..."
+echo "==> Compiling NitroBar..."
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 swiftc \
     -O \
-    -o "$MACOS_DIR/TeleCodeBar" \
+    -o "$MACOS_DIR/NitroBar" \
     -framework AppKit \
     -target arm64-apple-macosx13.0 \
     "$SWIFT_TMP"
 
 rm -f "$SWIFT_TMP"
-echo "    Compiled: $MACOS_DIR/TeleCodeBar"
+echo "    Compiled: $MACOS_DIR/NitroBar"
 
 # ─── Info.plist for the .app bundle ──────────────────────────────────
 cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
@@ -54,11 +54,11 @@ cat > "$CONTENTS_DIR/Info.plist" << 'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.telecode.bar</string>
+    <string>com.nitroagent.bar</string>
     <key>CFBundleName</key>
-    <string>TeleCodeBar</string>
+    <string>NitroBar</string>
     <key>CFBundleExecutable</key>
-    <string>TeleCodeBar</string>
+    <string>NitroBar</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>
@@ -74,7 +74,7 @@ PLIST
 echo "    App bundle: $APP_DIR"
 
 # ─── Auto-start menu bar app on login ────────────────────────────────
-MENUBAR_PLIST_LABEL="com.telecode.bar"
+MENUBAR_PLIST_LABEL="com.nitroagent.bar"
 MENUBAR_PLIST_DEST="$HOME/Library/LaunchAgents/$MENUBAR_PLIST_LABEL.plist"
 
 # Unload existing if present
@@ -89,7 +89,7 @@ cat > "$MENUBAR_PLIST_DEST" << MPLIST
     <string>$MENUBAR_PLIST_LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$MACOS_DIR/TeleCodeBar</string>
+        <string>$MACOS_DIR/NitroBar</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -104,7 +104,7 @@ echo "    Menu bar app auto-starts on login"
 
 # ─── Launch now (launchctl already started it, no need for open) ─────
 echo ""
-echo "==> TeleCodeBar launched via launchctl"
+echo "==> NitroBar launched via launchctl"
 
 echo ""
 echo "Done! Look for 'TC' in your menu bar (top-right)."

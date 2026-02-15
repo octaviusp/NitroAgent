@@ -41,7 +41,7 @@ pub async fn download_voice(
 
     let ext = file.path.rsplit('.').next().unwrap_or("ogg");
     let local_path = std::env::temp_dir().join(format!(
-        "telecode_voice_{}.{ext}",
+        "nitro_voice_{}.{ext}",
         file.meta.unique_id,
     ));
 

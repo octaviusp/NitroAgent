@@ -37,7 +37,7 @@ async fn main() {
         .compact()
         .init();
 
-    info!("TeleCode Bot (Rust) starting");
+    info!("NitroAgent starting");
 
     let config = match BotConfig::from_env() {
         Ok(c) => c,

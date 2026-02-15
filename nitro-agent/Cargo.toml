@@ -1,8 +1,8 @@
 [package]
-name = "rust-telecode-bot"
+name = "nitro-agent"
 version = "0.1.0"
 edition = "2021"
-description = "High-performance Telegram bot for Claude Code headless execution"
+description = "Ultra-fast optimized macOS remote-agent to code with Telegram"
 
 [dependencies]
 teloxide = { version = "0.13", features = ["macros"] }

@@ -1,30 +1,31 @@
-# TeleCode Bot — Project Instructions
+# NitroAgent — Project Instructions
 
 ## What This Is
 
-Rust-powered Telegram bot that bridges to Claude Code CLI (`claude -p`) for headless AI execution. Single-operator, local-first, SQLite-backed. The original Python bot was removed — this is Rust-only.
+Ultra-fast optimized macOS remote-agent to code with Telegram. Rust-powered, bridges to Claude Code CLI (`claude -p`) for headless AI execution. Single-operator, local-first, SQLite-backed.
 
 ## Project Structure
 
 ```
-rust-telecode-bot/
-├── Cargo.toml              # Rust crate: teloxide, tokio, sqlx, serde, chrono
+nitro-agent/
+├── Cargo.toml              # Rust crate: teloxide, tokio, sqlx, serde, chrono, pulldown-cmark
 ├── src/
-│   ├── main.rs             # Entry: long-polling loop, message extraction, access control
-│   ├── bot.rs              # Core logic: process_task, engine streaming, Telegram messaging
+│   ├── main.rs             # Entry: long-polling loop, message extraction, access control, callbacks
+│   ├── bot.rs              # Core logic: process_task, engine streaming, Telegram messaging, keyboards
 │   ├── commands.rs         # Slash command handlers (/start, /help, /status, /mcp, etc.)
 │   ├── config.rs           # BotConfig from env, claude/python binary resolution
 │   ├── db.rs               # SQLite: threads, runs, session_history tables
 │   ├── engine.rs           # Claude CLI command builder (stream-json, stdin piping)
-│   ├── stream.rs           # stream-json parser: text deltas, session IDs, metadata, usage
+│   ├── format.rs           # Markdown-to-Telegram-HTML converter, message splitting
+│   ├── stream.rs           # stream-json parser: text deltas, session IDs, metadata, usage, tool names
 │   ├── types.rs            # Shared types: MessageContext, ThreadKey, RunResult, etc.
 │   ├── voice.rs            # Voice download, photo download, VoiceTranscriber (sst.py server)
 │   └── worker.rs           # Per-thread worker queues, subprocess lifecycle
 ├── menubar/
-│   └── TeleCodeBar.swift   # macOS menu bar app for daemon start/stop/restart
+│   └── NitroBar.swift      # macOS menu bar app for daemon start/stop/restart
 ├── docs/
 │   └── CLAUDE_CODE_SPEC.md # Claude Code CLI stream-json format reference
-├── data/                   # SQLite DB (telecode_bot.db)
+├── data/                   # SQLite DB (nitro_agent.db)
 ├── logs/                   # Per-thread run logs
 └── workspaces/             # Per-thread working directories for Claude execution
 ```
@@ -32,13 +33,13 @@ rust-telecode-bot/
 ## Build & Run
 
 ```bash
-cd rust-telecode-bot
+cd nitro-agent
 cargo build --release
-# Binary: target/release/rust-telecode-bot
+# Binary: target/release/nitro-agent
 
 # Requires .env with TELEGRAM_BOT_TOKEN and ALLOWED_TELEGRAM_USER_IDS
 cp .env.example .env && $EDITOR .env
-./target/release/rust-telecode-bot
+./target/release/nitro-agent
 ```
 
 ## Architecture
@@ -53,6 +54,7 @@ cp .env.example .env && $EDITOR .env
    - Voice transcription pipeline (download -> sst.py -> prompt)
    - Photo analysis pipeline (download to workspace -> instruct Claude to Read)
    - Plain text prompt execution
+6. Callback queries from inline keyboards handled in polling loop
 
 ### Engine Execution
 - `engine.rs` builds: `claude -p - --output-format stream-json --verbose --dangerously-skip-permissions`
@@ -62,9 +64,19 @@ cp .env.example .env && $EDITOR .env
 - `--append-system-prompt` for compact memory injection
 
 ### Streaming
-- `stream.rs` parses line-by-line JSON: text deltas, session IDs, init metadata, usage/cost
+- `stream.rs` parses line-by-line JSON: text deltas, session IDs, init metadata, usage/cost, tool names
 - `RollingBuffer` keeps last N chars for Telegram display
-- `bot.rs` periodically edits the status message with latest output
+- `bot.rs` periodically edits the status message with animated spinner and tool activity strip
+- Typing indicator re-sent every 4s during execution
+
+### UI/UX
+- Animated braille spinner during streaming
+- Real-time tool activity strip (📖→✏️→🔨→📖)
+- Inline keyboards: Cancel during streaming, New/Retry/Restart on completion
+- Reply-to threading links responses to user messages
+- Completion summary with cost, duration, context fill bar
+- Markdown-to-HTML conversion for final output (pulldown-cmark)
+- Message splitting for >4000 char responses
 
 ### Persistence (SQLite)
 - `threads`: thread_key, engine, workspace_path, active_session_id, compact_summary, settings
@@ -83,7 +95,7 @@ cp .env.example .env && $EDITOR .env
 | `/start` | Show bot info (model, version, permission mode) |
 | `/help` | List all commands |
 | `/new` | Fresh session (clear session + memory) |
-| `/resume [id]` | Resume session or list recent sessions |
+| `/resume [id]` | Resume session or list recent sessions (inline buttons) |
 | `/clear` | Full reset (session + memory + new workspace) |
 | `/compact` | Compress memory via structured summary |
 | `/cancel` | Kill running subprocess |
@@ -119,4 +131,4 @@ cp .env.example .env && $EDITOR .env
 - Photo files persist in workspace as `_photo_{unique_id}.{ext}` — not auto-cleaned
 - All subprocess env vars strip `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT` to avoid nesting detection
 - Telegram messages capped at 4000 chars with truncation
-- Pre-commit: `cargo build --release` (no test suite yet in Rust crate)
+- Pre-commit: `cargo build --release`

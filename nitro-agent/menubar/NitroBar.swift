@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 // ─── Config ─────────────────────────────────────────────────────────
-private let kLabel       = "com.telecode.bot"
+private let kLabel       = "com.nitroagent.bot"
 private let kProjectDir  = "__PROJECT_DIR__"
 private let kBinaryPath  = "__BINARY_PATH__"
 private let kPlistSource = "__PLIST_SOURCE__"
@@ -72,7 +72,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Open Project Folder", action: #selector(openProject), keyEquivalent: "o"))
 
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit TeleCode Bar", action: #selector(quitApp), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit NitroAgent", action: #selector(quitApp), keyEquivalent: "q"))
 
         self.statusItem.menu = menu
 
@@ -167,7 +167,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let pipe = Pipe()
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-f", "rust-telecode-bot"]
+        task.arguments = ["-f", "nitro-agent"]
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
         try? task.run()

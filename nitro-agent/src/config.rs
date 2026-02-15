@@ -57,7 +57,7 @@ impl BotConfig {
             return Err("DEFAULT_TOOL_MODE must be safe or full".into());
         }
 
-        let db_path = PathBuf::from(env_or("DB_PATH", "data/telecode_bot.db"));
+        let db_path = PathBuf::from(env_or("DB_PATH", "data/nitro_agent.db"));
         let workspace_root = PathBuf::from(env_or("WORKSPACE_ROOT", "workspaces"));
         let logs_root = PathBuf::from(env_or("LOGS_ROOT", "logs"));
 

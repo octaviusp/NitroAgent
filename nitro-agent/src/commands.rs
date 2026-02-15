@@ -94,8 +94,8 @@ async fn handle_start(
 
     let html = format!(
         "\
-<b>TeleCode Bot</b>
-High-performance Claude Code bridge
+<b>NitroAgent</b>
+Ultra-fast macOS remote-agent
 
 <b>Model</b>    <code>{model}</code>
 <b>Version</b>  <code>{version}</code>

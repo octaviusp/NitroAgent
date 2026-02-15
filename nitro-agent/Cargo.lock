@@ -1119,6 +1119,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nitro-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dotenvy",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "teloxide",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1556,22 +1572,6 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rust-telecode-bot"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "dotenvy",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "sqlx",
- "teloxide",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

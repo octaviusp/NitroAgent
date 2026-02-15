@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.telecode.bot</string>
+    <string>com.nitroagent.bot</string>
 
     <key>ProgramArguments</key>
     <array>
