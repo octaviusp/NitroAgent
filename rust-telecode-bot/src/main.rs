@@ -46,6 +46,8 @@ async fn main() {
         }
     };
 
+    info!(claude_bin = %config.claude_bin, "Resolved claude binary");
+
     // Startup checks for voice transcription dependencies
     if !voice::check_ffmpeg() {
         warn!("ffmpeg not found on PATH — voice transcription will fail");

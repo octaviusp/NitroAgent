@@ -85,7 +85,7 @@ impl BotConfig {
             db_path,
             workspace_root,
             logs_root,
-            claude_bin: env_or("CLAUDE_BIN", "claude"),
+            claude_bin: resolve_claude_bin(),
             claude_safe_allowed_tools: parse_tool_list(&env_or(
                 "CLAUDE_SAFE_ALLOWED_TOOLS",
                 "Read,Edit,Bash",
@@ -97,6 +97,55 @@ impl BotConfig {
             sst_arch: env_or("SST_ARCH", "base"),
         })
     }
+}
+
+/// Resolve claude binary to an absolute path at startup.
+/// Checks PATH via `which`, then well-known install locations.
+fn resolve_claude_bin() -> String {
+    let name = env_or("CLAUDE_BIN", "claude");
+
+    // Already absolute — use as-is if it exists
+    let p = PathBuf::from(&name);
+    if p.is_absolute() {
+        if p.exists() {
+            return name;
+        }
+        // Absolute but missing — still return it so the error is obvious
+        return name;
+    }
+
+    // Try `which` to resolve via current PATH
+    if let Ok(output) = std::process::Command::new("which")
+        .arg(&name)
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(path) = String::from_utf8(output.stdout) {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+
+    // Check well-known locations
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{home}/.local/bin/{name}"),
+        format!("/usr/local/bin/{name}"),
+        format!("/opt/homebrew/bin/{name}"),
+        format!("{home}/.nvm/current/bin/{name}"),
+        format!("{home}/.bun/bin/{name}"),
+    ];
+    for candidate in &candidates {
+        if PathBuf::from(candidate).exists() {
+            return candidate.clone();
+        }
+    }
+
+    // Fallback to bare name (will rely on PATH at spawn time)
+    name
 }
 
 /// Resolve python binary to an absolute path at startup so CWD changes don't break it.

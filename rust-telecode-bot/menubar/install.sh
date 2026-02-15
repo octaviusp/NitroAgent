@@ -30,6 +30,7 @@ sed \
     -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" \
     -e "s|__BINARY_PATH__|$BINARY_PATH|g" \
     -e "s|__PLIST_SOURCE__|$PLIST_SOURCE|g" \
+    -e "s|__HOME_DIR__|$HOME|g" \
     "$SWIFT_SRC" > "$SWIFT_TMP"
 
 # ─── Compile ─────────────────────────────────────────────────────────

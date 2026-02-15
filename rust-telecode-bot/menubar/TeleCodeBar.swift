@@ -186,7 +186,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildEnv() -> [String: String] {
         // Load .env from project dir
         var env = ProcessInfo.processInfo.environment
-        env["PATH"] = "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:" + (env["PATH"] ?? "")
+        let home = NSHomeDirectory()
+        env["PATH"] = "\(home)/.local/bin:\(home)/.bun/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:" + (env["PATH"] ?? "")
 
         let dotEnvPath = kProjectDir + "/.env"
         if let contents = try? String(contentsOfFile: dotEnvPath, encoding: .utf8) {
@@ -212,6 +213,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let resolved = template
             .replacingOccurrences(of: "__BINARY_PATH__", with: kBinaryPath)
             .replacingOccurrences(of: "__PROJECT_DIR__", with: kProjectDir)
+            .replacingOccurrences(of: "__HOME_DIR__", with: NSHomeDirectory())
 
         let destDir = NSHomeDirectory() + "/Library/LaunchAgents"
         try? FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
