@@ -389,7 +389,7 @@ impl BotCore {
             None
         };
 
-        let result = self
+        let mut result = self
             .execute_engine_stream(
                 thread_key,
                 thread_state,
@@ -408,6 +408,47 @@ impl BotCore {
         self.store
             .finish_run(run_id, result.status.as_str())
             .await?;
+
+        // Auto-recover from stale/expired session: clear and retry fresh
+        if result.status == RunStatus::Failed
+            && thread_state.active_session_id.is_some()
+            && result.output_tail.contains("No conversation found")
+        {
+            self.store
+                .set_active_session(thread_key.as_str(), None)
+                .await?;
+
+            let retry_log = self.build_log_path(thread_key);
+            let retry_run_id = self
+                .store
+                .create_run(
+                    thread_key.as_str(),
+                    &thread_state.active_engine,
+                    status_msg_id,
+                    &retry_log.to_string_lossy(),
+                )
+                .await?;
+
+            result = self
+                .execute_engine_stream(
+                    thread_key,
+                    thread_state,
+                    prompt,
+                    task.message.chat_id,
+                    status_msg_id,
+                    None,
+                    thread_state.compact_summary.as_deref(),
+                    cancel_requested,
+                    current_process,
+                    &retry_log,
+                    retry_run_id,
+                )
+                .await?;
+
+            self.store
+                .finish_run(retry_run_id, result.status.as_str())
+                .await?;
+        }
 
         if let Some(ref sid) = result.session_id {
             self.store
