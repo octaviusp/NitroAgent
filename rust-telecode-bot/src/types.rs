@@ -46,6 +46,8 @@ pub struct MessageContext {
     pub text: String,
     pub message_id: i32,
     pub thread_id: Option<i64>,
+    /// Local path to a downloaded voice/audio file awaiting transcription.
+    pub voice_file: Option<PathBuf>,
 }
 
 /// A task enqueued for a thread worker.

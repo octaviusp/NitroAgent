@@ -6,6 +6,7 @@ mod engine;
 mod stream;
 #[allow(dead_code)]
 mod types;
+mod voice;
 mod worker;
 
 use std::sync::Arc;
@@ -98,12 +99,6 @@ async fn main() {
                         _ => continue,
                     };
 
-                    let msg_text: Option<&str> = msg.text();
-                    let text = match msg_text {
-                        Some(t) => t.to_string(),
-                        None => continue,
-                    };
-
                     let user = match &msg.from {
                         Some(u) => u,
                         None => continue,
@@ -116,8 +111,37 @@ async fn main() {
 
                     let chat_id = msg.chat.id.0;
                     let thread_id = msg.thread_id.map(|tid| tid.0 .0 as i64);
-                    let thread_key = ThreadKey::new(chat_id, thread_id);
 
+                    // Extract text or download voice/audio file
+                    let (text, voice_file) = if let Some(t) = msg.text() {
+                        (t.to_string(), None)
+                    } else if msg.voice().is_some() || msg.audio().is_some() {
+                        let file_id = msg
+                            .voice()
+                            .map(|v| v.file.id.clone())
+                            .or_else(|| msg.audio().map(|a| a.file.id.clone()));
+                        match file_id {
+                            Some(id) => match voice::download_voice(&tg, &id).await {
+                                Ok(path) => ("[voice]".to_string(), Some(path)),
+                                Err(e) => {
+                                    error!("Voice download failed: {e}");
+                                    let _ = bot_core
+                                        .send_html(
+                                            chat_id,
+                                            thread_id,
+                                            "⚠️ <b>Voice download failed</b>",
+                                        )
+                                        .await;
+                                    continue;
+                                }
+                            },
+                            None => continue,
+                        }
+                    } else {
+                        continue;
+                    };
+
+                    let thread_key = ThreadKey::new(chat_id, thread_id);
                     let command = parse_command(&text);
 
                     let task = IncomingTask {
@@ -127,6 +151,7 @@ async fn main() {
                             text,
                             message_id: msg.id.0,
                             thread_id,
+                            voice_file,
                         },
                         command,
                     };

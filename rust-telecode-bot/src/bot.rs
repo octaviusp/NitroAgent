@@ -16,6 +16,7 @@ use crate::db::ThreadStore;
 use crate::engine::build_claude_command;
 use crate::stream::{parse_stream_line, RollingBuffer};
 use crate::types::*;
+use crate::voice;
 
 /// Core bot logic shared across workers.
 pub struct BotCore {
@@ -138,12 +139,65 @@ impl BotCore {
             return Ok(());
         }
 
-        // Plain text prompt
+        // Voice transcription → prompt, or plain text prompt
+        let prompt = if let Some(ref voice_path) = task.message.voice_file {
+            let status = self
+                .send_html(
+                    task.message.chat_id,
+                    task.message.thread_id,
+                    "🎤 <b>Transcribing voice...</b>",
+                )
+                .await?;
+
+            match voice::transcribe(&self.config, voice_path).await {
+                Ok(text) => {
+                    let _ = tokio::fs::remove_file(voice_path).await;
+
+                    if text.is_empty() {
+                        self.edit_html(
+                            task.message.chat_id,
+                            status.id.0,
+                            "⚠️ <b>Empty transcript</b>\nCould not extract text from voice.",
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+
+                    // Show what was transcribed
+                    let preview: String = text.chars().take(200).collect();
+                    let _ = self
+                        .edit_html(
+                            task.message.chat_id,
+                            status.id.0,
+                            &format!("🎤 <b>Transcribed</b>\n<i>{}</i>", html_escape(&preview)),
+                        )
+                        .await;
+
+                    text
+                }
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(voice_path).await;
+                    self.edit_html(
+                        task.message.chat_id,
+                        status.id.0,
+                        &format!(
+                            "❌ <b>Transcription failed</b>\n<pre>{}</pre>",
+                            html_escape(&e.to_string()),
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            }
+        } else {
+            task.message.text.clone()
+        };
+
         self.run_user_prompt(
             thread_key,
             task,
             &thread_state,
-            &task.message.text,
+            &prompt,
             cancel_requested,
             current_process,
         )

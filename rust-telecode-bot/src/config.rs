@@ -18,6 +18,11 @@ pub struct BotConfig {
     pub claude_bin: String,
     pub claude_safe_allowed_tools: Vec<String>,
     pub claude_full_allowed_tools: Vec<String>,
+    // ── Speech-to-text (sst.py) ──
+    pub sst_python: String,
+    pub sst_script: PathBuf,
+    pub sst_language: String,
+    pub sst_arch: String,
 }
 
 impl BotConfig {
@@ -86,7 +91,43 @@ impl BotConfig {
                 "Read,Edit,Bash",
             )),
             claude_full_allowed_tools: parse_tool_list(&env_or("CLAUDE_FULL_ALLOWED_TOOLS", "")),
+            sst_python: resolve_sst_python(),
+            sst_script: resolve_sst_script(),
+            sst_language: env_or("SST_LANGUAGE", "es"),
+            sst_arch: env_or("SST_ARCH", "base"),
         })
+    }
+}
+
+fn resolve_sst_python() -> String {
+    let explicit = env_or("SST_PYTHON", "");
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    // Auto-detect project venv
+    let venv = PathBuf::from("../.venv/bin/python3");
+    if venv.exists() {
+        venv.canonicalize()
+            .unwrap_or(venv)
+            .to_string_lossy()
+            .to_string()
+    } else {
+        "python3".to_string()
+    }
+}
+
+fn resolve_sst_script() -> PathBuf {
+    let explicit = env_or("SST_SCRIPT", "");
+    if !explicit.is_empty() {
+        return PathBuf::from(explicit);
+    }
+    let relative = PathBuf::from("../sst.py");
+    if relative.exists() {
+        relative
+            .canonicalize()
+            .unwrap_or(relative)
+    } else {
+        relative
     }
 }
 
