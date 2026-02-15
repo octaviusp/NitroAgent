@@ -31,6 +31,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single-instance guard: terminate any older instances
+        terminateOlderInstances()
+
         statusItem = NSStatusBar.system.statusItem(withLength: 28)
         if let btn = statusItem.button, let icon = loadMenuBarIcon() {
             btn.image = icon
@@ -44,6 +47,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Poll status every 5 seconds
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.rebuildMenu()
+        }
+    }
+
+    /// Kill any older NitroBar instances so only this one remains.
+    private func terminateOlderInstances() {
+        let myPID = ProcessInfo.processInfo.processIdentifier
+
+        // Method 1: via bundle identifier (works when launched as .app)
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.nitroagent.bar"
+        for instance in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            where instance.processIdentifier != myPID {
+            instance.terminate()
+        }
+
+        // Method 2: pgrep fallback (covers direct binary launch)
+        let pipe = Pipe()
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        task.arguments = ["-x", "NitroBar"]
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+
+        if let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                               encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !output.isEmpty {
+            for pid in output.components(separatedBy: "\n").compactMap({ Int32($0) })
+                where pid != myPID {
+                kill(pid, SIGTERM)
+            }
         }
     }
 
