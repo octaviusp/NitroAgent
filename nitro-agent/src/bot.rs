@@ -63,22 +63,6 @@ impl BotCore {
         }
     }
 
-    /// Build inline keyboard for a completed successful run.
-    fn run_success_keyboard() -> InlineKeyboardMarkup {
-        InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback("🆕 New", "new"),
-            InlineKeyboardButton::callback("🔄 Retry", "retry"),
-        ]])
-    }
-
-    /// Build inline keyboard for a failed run.
-    fn run_failed_keyboard() -> InlineKeyboardMarkup {
-        InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback("♻️ Restart", "restart"),
-            InlineKeyboardButton::callback("🆕 New", "new"),
-        ]])
-    }
-
     /// Build inline keyboard with cancel button.
     fn cancel_keyboard() -> InlineKeyboardMarkup {
         InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
@@ -530,11 +514,7 @@ impl BotCore {
 
         // Split long messages
         let chunks = format::split_for_telegram(&final_html, 4000);
-        let keyboard = match result.status {
-            RunStatus::Succeeded => Some(Self::run_success_keyboard()),
-            RunStatus::Failed => Some(Self::run_failed_keyboard()),
-            RunStatus::Canceled => Some(Self::run_failed_keyboard()),
-        };
+        let keyboard: Option<InlineKeyboardMarkup> = None;
 
         if let Some(first) = chunks.first() {
             let kb = if chunks.len() == 1 { keyboard.clone() } else { None };
