@@ -194,6 +194,22 @@ impl ThreadStore {
         Ok(())
     }
 
+    pub async fn set_workspace_path(
+        &self,
+        thread_key: &str,
+        path: &std::path::Path,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE threads SET workspace_path = ?, updated_at = ? WHERE thread_key = ?",
+        )
+        .bind(path.to_string_lossy().as_ref())
+        .bind(utc_now())
+        .bind(thread_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn clear_thread_state(&self, thread_key: &str) -> Result<ThreadState, sqlx::Error> {
         let fresh = self.fresh_workspace(thread_key);
         let settings = ThreadSettings {

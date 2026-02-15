@@ -5,7 +5,7 @@ use std::time::Instant;
 use teloxide::payloads::{EditMessageTextSetters, SendMessageSetters};
 use teloxide::prelude::*;
 use teloxide::types::ParseMode;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
@@ -112,6 +112,13 @@ impl BotCore {
                         cancel_requested,
                         current_process,
                     )
+                    .await;
+            }
+
+            // Bash — direct shell execution
+            if command.name == "bash" {
+                return self
+                    .handle_bash(task, &thread_state, cancel_requested, current_process)
                     .await;
             }
 
@@ -737,6 +744,169 @@ impl BotCore {
         );
         self.edit_html(task.message.chat_id, status_msg_id, &final_html)
             .await?;
+
+        Ok(())
+    }
+
+    async fn handle_bash(
+        &self,
+        task: &IncomingTask,
+        thread_state: &ThreadState,
+        cancel_requested: &Mutex<bool>,
+        current_process: &Mutex<Option<Child>>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let cmd_str = task
+            .command
+            .as_ref()
+            .map(|c| c.args.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if cmd_str.is_empty() {
+            self.send_html(
+                task.message.chat_id,
+                task.message.thread_id,
+                "<b>Usage</b>\n/bash &lt;command&gt;",
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let status_msg = self
+            .send_html(
+                task.message.chat_id,
+                task.message.thread_id,
+                &format!("⏳ <code>$ {}</code>", html_escape(cmd_str)),
+            )
+            .await?;
+        let status_msg_id = status_msg.id.0;
+
+        let workspace = &thread_state.workspace_path;
+        std::fs::create_dir_all(workspace)?;
+
+        // Build clean env (strip Claude Code nesting vars)
+        let mut env: HashMap<String, String> = std::env::vars().collect();
+        for key in &[
+            "CLAUDECODE",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+        ] {
+            env.remove(*key);
+        }
+
+        let mut child = tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg(cmd_str)
+            .current_dir(workspace)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .env_clear()
+            .envs(&env)
+            .kill_on_drop(true)
+            .spawn()?;
+
+        let stdout = child.stdout.take().ok_or("Failed to capture bash stdout")?;
+        let stderr = child.stderr.take().ok_or("Failed to capture bash stderr")?;
+
+        {
+            let mut proc_guard = current_process.lock().await;
+            *proc_guard = Some(child);
+        }
+
+        // Read stdout and stderr concurrently (100KB limit each) with 120s timeout
+        let read_out = async {
+            let mut bytes = Vec::new();
+            let mut limited = stdout.take(100 * 1024);
+            let _ = limited.read_to_end(&mut bytes).await;
+            String::from_utf8_lossy(&bytes).to_string()
+        };
+        let read_err = async {
+            let mut bytes = Vec::new();
+            let mut limited = stderr.take(100 * 1024);
+            let _ = limited.read_to_end(&mut bytes).await;
+            String::from_utf8_lossy(&bytes).to_string()
+        };
+
+        let timeout_dur = std::time::Duration::from_secs(120);
+        let (stdout_text, stderr_text, timed_out) =
+            match tokio::time::timeout(timeout_dur, async { tokio::join!(read_out, read_err) })
+                .await
+            {
+                Ok((out, err)) => (out, err, false),
+                Err(_) => {
+                    let mut proc_guard = current_process.lock().await;
+                    if let Some(ref mut child) = *proc_guard {
+                        let _ = child.kill().await;
+                    }
+                    (String::new(), String::new(), true)
+                }
+            };
+
+        // Wait for process exit
+        let exit_code = {
+            let mut proc_guard = current_process.lock().await;
+            if let Some(ref mut child) = *proc_guard {
+                match child.wait().await {
+                    Ok(status) => status.code().unwrap_or(-1),
+                    Err(_) => -1,
+                }
+            } else {
+                -1
+            }
+        };
+
+        let cancelled = *cancel_requested.lock().await;
+
+        // Build output
+        let mut output = String::new();
+        if !stdout_text.is_empty() {
+            output.push_str(&stdout_text);
+        }
+        if !stderr_text.is_empty() {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(&stderr_text);
+        }
+        if output.is_empty() {
+            output = "(no output)".to_string();
+        }
+
+        let html = if timed_out {
+            format!(
+                "⏱ <code>$ {}</code>\n\n<b>Timed out</b> (120s)\n\n<pre>{}</pre>",
+                html_escape(cmd_str),
+                html_escape(&output),
+            )
+        } else if cancelled {
+            format!(
+                "⏹ <code>$ {}</code>\n\n<b>Canceled</b>\n\n<pre>{}</pre>",
+                html_escape(cmd_str),
+                html_escape(&output),
+            )
+        } else {
+            let icon = if exit_code == 0 { "✅" } else { "❌" };
+            format!(
+                "{icon} <code>$ {cmd}</code>  ·  exit {code}\n\n<pre>{output}</pre>",
+                cmd = html_escape(cmd_str),
+                code = exit_code,
+                output = html_escape(&output),
+            )
+        };
+
+        if let Err(e) = self
+            .edit_html(task.message.chat_id, status_msg_id, &truncate_for_telegram(&html))
+            .await
+        {
+            warn!("Failed to edit bash result: {e}");
+            let _ = self
+                .send_html(
+                    task.message.chat_id,
+                    task.message.thread_id,
+                    &truncate_for_telegram(&html),
+                )
+                .await;
+        }
 
         Ok(())
     }

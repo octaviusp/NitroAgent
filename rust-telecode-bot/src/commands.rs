@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::bot::{html_escape, truncate_for_telegram, BotCore};
 use crate::types::{CachedClaudeInfo, ParsedCommand, ThreadState};
 
@@ -55,8 +57,12 @@ pub async fn handle_command(
             handle_tasks(bot, chat_id, thread_id, thread_key).await?;
             Ok(true)
         }
-        // cancel, restart, compact → handled in bot.rs (need subprocess)
-        "compact" | "cancel" | "restart" => Ok(false),
+        "cd" | "pwd" => {
+            handle_cd(bot, chat_id, thread_id, thread_key, thread_state, &command.args).await?;
+            Ok(true)
+        }
+        // cancel, restart, compact, bash → handled in bot.rs (need subprocess)
+        "compact" | "cancel" | "restart" | "bash" => Ok(false),
         _ => Ok(false),
     }
 }
@@ -121,6 +127,10 @@ async fn handle_help(
 <b>Execution</b>
 /cancel — Kill running process
 /restart — Reset Claude Code
+/bash &lt;cmd&gt; — Run shell command
+
+<b>Navigation</b>
+/cd [path] — Show or change workspace
 
 <b>Info</b>
 /status — Thread state
@@ -224,6 +234,90 @@ async fn handle_clear(
          Session and memory removed.\n\
          Workspace: <code>{}</code>",
         html_escape(&fresh.workspace_path.to_string_lossy())
+    );
+    bot.send_html(chat_id, thread_id, &html).await?;
+    Ok(())
+}
+
+// ── /cd ──
+
+async fn handle_cd(
+    bot: &BotCore,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    thread_key: &str,
+    state: &ThreadState,
+    args: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let path_str = args.trim();
+
+    if path_str.is_empty() {
+        let html = format!(
+            "<b>Workspace</b>\n<code>{}</code>",
+            html_escape(&state.workspace_path.to_string_lossy()),
+        );
+        bot.send_html(chat_id, thread_id, &html).await?;
+        return Ok(());
+    }
+
+    // Expand ~ to HOME
+    let expanded = if path_str.starts_with("~/") {
+        match std::env::var("HOME") {
+            Ok(home) => format!("{}/{}", home, &path_str[2..]),
+            Err(_) => path_str.to_string(),
+        }
+    } else if path_str == "~" {
+        std::env::var("HOME").unwrap_or_else(|_| path_str.to_string())
+    } else {
+        path_str.to_string()
+    };
+
+    let path = PathBuf::from(&expanded);
+
+    // Resolve relative paths against current workspace
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        state.workspace_path.join(&path)
+    };
+
+    // Canonicalize (resolves symlinks, .., etc.)
+    let canonical = match resolved.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            bot.send_html(
+                chat_id,
+                thread_id,
+                &format!(
+                    "❌ <b>Path not found</b>\n<code>{}</code>",
+                    html_escape(&resolved.to_string_lossy()),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if !canonical.is_dir() {
+        bot.send_html(
+            chat_id,
+            thread_id,
+            &format!(
+                "❌ <b>Not a directory</b>\n<code>{}</code>",
+                html_escape(&canonical.to_string_lossy()),
+            ),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    bot.store
+        .set_workspace_path(thread_key, &canonical)
+        .await?;
+
+    let html = format!(
+        "✅ <b>Workspace</b>\n<code>{}</code>",
+        html_escape(&canonical.to_string_lossy()),
     );
     bot.send_html(chat_id, thread_id, &html).await?;
     Ok(())
