@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use teloxide::prelude::*;
 use teloxide::types::UpdateKind;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::bot::BotCore;
 use crate::commands::parse_command;
@@ -45,6 +45,17 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // Startup checks for voice transcription dependencies
+    if !voice::check_ffmpeg() {
+        warn!("ffmpeg not found on PATH — voice transcription will fail");
+    }
+    if !config.sst_script.exists() {
+        warn!(
+            path = %config.sst_script.display(),
+            "sst.py not found — voice transcription will fail"
+        );
+    }
 
     let store = match ThreadStore::new(&config).await {
         Ok(s) => s,
@@ -112,8 +123,8 @@ async fn main() {
                     let chat_id = msg.chat.id.0;
                     let thread_id = msg.thread_id.map(|tid| tid.0 .0 as i64);
 
-                    // Extract text or download voice/audio file
-                    let (text, voice_file) = if let Some(t) = msg.text() {
+                    // Extract text or voice file_id (download happens in worker)
+                    let (text, voice_file_id) = if let Some(t) = msg.text() {
                         (t.to_string(), None)
                     } else if msg.voice().is_some() || msg.audio().is_some() {
                         let file_id = msg
@@ -121,20 +132,7 @@ async fn main() {
                             .map(|v| v.file.id.clone())
                             .or_else(|| msg.audio().map(|a| a.file.id.clone()));
                         match file_id {
-                            Some(id) => match voice::download_voice(&tg, &id).await {
-                                Ok(path) => ("[voice]".to_string(), Some(path)),
-                                Err(e) => {
-                                    error!("Voice download failed: {e}");
-                                    let _ = bot_core
-                                        .send_html(
-                                            chat_id,
-                                            thread_id,
-                                            "⚠️ <b>Voice download failed</b>",
-                                        )
-                                        .await;
-                                    continue;
-                                }
-                            },
+                            Some(id) => ("[voice]".to_string(), Some(id)),
                             None => continue,
                         }
                     } else {
@@ -151,7 +149,7 @@ async fn main() {
                             text,
                             message_id: msg.id.0,
                             thread_id,
-                            voice_file,
+                            voice_file_id,
                         },
                         command,
                     };

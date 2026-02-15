@@ -99,36 +99,51 @@ impl BotConfig {
     }
 }
 
+/// Resolve python binary to an absolute path at startup so CWD changes don't break it.
 fn resolve_sst_python() -> String {
     let explicit = env_or("SST_PYTHON", "");
     if !explicit.is_empty() {
+        let p = PathBuf::from(&explicit);
+        if p.exists() {
+            return resolve_to_absolute(p).to_string_lossy().to_string();
+        }
+        // May be a bare name like "python3" resolved via PATH — keep as-is
         return explicit;
     }
     // Auto-detect project venv
     let venv = PathBuf::from("../.venv/bin/python3");
     if venv.exists() {
-        venv.canonicalize()
-            .unwrap_or(venv)
-            .to_string_lossy()
-            .to_string()
+        resolve_to_absolute(venv).to_string_lossy().to_string()
     } else {
         "python3".to_string()
     }
 }
 
+/// Resolve sst.py script to an absolute path at startup.
 fn resolve_sst_script() -> PathBuf {
     let explicit = env_or("SST_SCRIPT", "");
-    if !explicit.is_empty() {
-        return PathBuf::from(explicit);
-    }
-    let relative = PathBuf::from("../sst.py");
-    if relative.exists() {
-        relative
-            .canonicalize()
-            .unwrap_or(relative)
+    let path = if !explicit.is_empty() {
+        PathBuf::from(explicit)
     } else {
-        relative
+        PathBuf::from("../sst.py")
+    };
+    resolve_to_absolute(path)
+}
+
+/// Convert a relative path to absolute using canonicalize (if file exists)
+/// or CWD join (if file doesn't exist yet). Ensures the path survives CWD changes.
+fn resolve_to_absolute(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        return path;
     }
+    if let Ok(abs) = path.canonicalize() {
+        return abs;
+    }
+    // File doesn't exist — make absolute relative to current CWD
+    if let Ok(cwd) = std::env::current_dir() {
+        return cwd.join(&path);
+    }
+    path
 }
 
 fn require_env(key: &str) -> Result<String, String> {

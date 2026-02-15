@@ -25,15 +25,19 @@ pub struct BotCore {
     pub tg: Bot,
     /// Cached Claude Code metadata per thread (populated from stream-json events).
     pub info_cache: RwLock<HashMap<String, CachedClaudeInfo>>,
+    /// Persistent voice transcriber (keeps ML model loaded).
+    pub voice: voice::VoiceTranscriber,
 }
 
 impl BotCore {
     pub fn new(config: BotConfig, store: ThreadStore, tg: Bot) -> Self {
+        let voice_transcriber = voice::VoiceTranscriber::new(&config);
         Self {
             config,
             store,
             tg,
             info_cache: RwLock::new(HashMap::new()),
+            voice: voice_transcriber,
         }
     }
 
@@ -139,19 +143,45 @@ impl BotCore {
             return Ok(());
         }
 
-        // Voice transcription → prompt, or plain text prompt
-        let prompt = if let Some(ref voice_path) = task.message.voice_file {
+        // Voice: download in worker (not poller) → transcribe → use as prompt
+        let prompt = if let Some(ref file_id) = task.message.voice_file_id {
             let status = self
                 .send_html(
                     task.message.chat_id,
                     task.message.thread_id,
-                    "🎤 <b>Transcribing voice...</b>",
+                    "🎤 <b>Downloading voice...</b>",
                 )
                 .await?;
 
-            match voice::transcribe(&self.config, voice_path).await {
+            // Download — TempFileGuard auto-deletes on drop (even on panic)
+            let voice_guard = match voice::download_voice(&self.tg, file_id).await {
+                Ok(g) => g,
+                Err(e) => {
+                    self.edit_html(
+                        task.message.chat_id,
+                        status.id.0,
+                        &format!(
+                            "❌ <b>Voice download failed</b>\n<pre>{}</pre>",
+                            html_escape(&e.to_string()),
+                        ),
+                    )
+                    .await?;
+                    return Ok(());
+                }
+            };
+
+            let _ = self
+                .edit_html(
+                    task.message.chat_id,
+                    status.id.0,
+                    "🎤 <b>Transcribing voice...</b>",
+                )
+                .await;
+
+            // Transcribe via persistent sst.py server
+            match self.voice.transcribe(voice_guard.path()).await {
                 Ok(text) => {
-                    let _ = tokio::fs::remove_file(voice_path).await;
+                    // voice_guard drops here, cleaning up temp file
 
                     if text.is_empty() {
                         self.edit_html(
@@ -163,7 +193,6 @@ impl BotCore {
                         return Ok(());
                     }
 
-                    // Show what was transcribed
                     let preview: String = text.chars().take(200).collect();
                     let _ = self
                         .edit_html(
@@ -176,7 +205,7 @@ impl BotCore {
                     text
                 }
                 Err(e) => {
-                    let _ = tokio::fs::remove_file(voice_path).await;
+                    // voice_guard drops here too — temp file cleaned up
                     self.edit_html(
                         task.message.chat_id,
                         status.id.0,
