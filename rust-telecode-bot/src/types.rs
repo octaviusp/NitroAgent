@@ -163,16 +163,26 @@ pub struct SessionMeta {
     pub model: String,
     pub version: String,
     pub permission_mode: String,
+    pub cwd: String,
     pub tools: Vec<String>,
     pub mcp_servers: Vec<McpServerInfo>,
     pub skills: Vec<String>,
     pub agents: Vec<String>,
+    pub slash_commands: Vec<String>,
+    pub plugins: Vec<PluginInfo>,
+    pub fast_mode_state: String,
+    pub api_key_source: String,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct McpServerInfo {
     pub name: String,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PluginInfo {
+    pub name: String,
 }
 
 /// Token usage from a Claude Code `result` event.
@@ -183,6 +193,10 @@ pub struct UsageInfo {
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
     pub total_cost_usd: f64,
+    /// From modelUsage.<model>.contextWindow (0 = unknown).
+    pub context_window: u64,
+    /// From modelUsage.<model>.maxOutputTokens (0 = unknown).
+    pub max_output_tokens: u64,
 }
 
 /// Combined cached info per thread, populated from stream-json events.

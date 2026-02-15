@@ -327,13 +327,13 @@ fn format_context_with_data(info: &CachedClaudeInfo, state: &ThreadState) -> Str
     let u = &info.usage;
     let total_tokens = u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_creation_tokens;
 
-    // Context window is 200k for opus/sonnet
-    let context_window: u64 = 200_000;
-    let pct = if context_window > 0 {
-        ((total_tokens as f64 / context_window as f64) * 100.0).min(100.0)
+    // Use real context window from modelUsage, fallback to 200k
+    let context_window = if u.context_window > 0 {
+        u.context_window
     } else {
-        0.0
+        200_000
     };
+    let pct = ((total_tokens as f64 / context_window as f64) * 100.0).min(100.0);
 
     // Build visual bar (10 blocks)
     let filled = ((pct / 10.0).round() as usize).min(10);
@@ -357,8 +357,8 @@ fn format_context_with_data(info: &CachedClaudeInfo, state: &ThreadState) -> Str
 <b>Cache write</b> {cache_w}k tokens
 <b>Cost</b>        ${cost:.4}
 
-<b>Model</b>    <code>{model}</code>
-<b>Session</b>  <code>{session}</code>",
+<b>Model</b>      <code>{model}</code>
+<b>Session</b>    <code>{session}</code>",
         bar = bar,
         total = total_tokens / 1000,
         window = context_window / 1000,
@@ -372,18 +372,34 @@ fn format_context_with_data(info: &CachedClaudeInfo, state: &ThreadState) -> Str
         session = html_escape(state.active_session_id.as_deref().unwrap_or("—")),
     );
 
-    // MCP server count
+    if u.max_output_tokens > 0 {
+        html.push_str(&format!(
+            "\n<b>Max output</b> {}k tokens",
+            u.max_output_tokens / 1000
+        ));
+    }
     if !info.meta.mcp_servers.is_empty() {
         html.push_str(&format!(
-            "\n<b>MCPs</b>      {}",
+            "\n<b>MCPs</b>       {}",
             info.meta.mcp_servers.len()
         ));
     }
-    // Tool count
     if !info.meta.tools.is_empty() {
         html.push_str(&format!(
-            "\n<b>Tools</b>     {}",
+            "\n<b>Tools</b>      {}",
             info.meta.tools.len()
+        ));
+    }
+    if !info.meta.plugins.is_empty() {
+        html.push_str(&format!(
+            "\n<b>Plugins</b>    {}",
+            info.meta.plugins.len()
+        ));
+    }
+    if !info.meta.fast_mode_state.is_empty() {
+        html.push_str(&format!(
+            "\n<b>Fast mode</b>  <code>{}</code>",
+            html_escape(&info.meta.fast_mode_state)
         ));
     }
 
@@ -472,41 +488,88 @@ async fn handle_skills(
     let info = cache.get(thread_key);
 
     let html = match info {
-        Some(info) if !info.meta.skills.is_empty() => {
-            let count = info.meta.skills.len();
-            let list: String = info
-                .meta
-                .skills
-                .iter()
-                .map(|s| format!("  <code>{}</code>", html_escape(s)))
-                .collect::<Vec<_>>()
-                .join("\n");
+        Some(info) => {
+            let mut result = String::new();
+            let has_any = !info.meta.skills.is_empty()
+                || !info.meta.slash_commands.is_empty()
+                || !info.meta.agents.is_empty()
+                || !info.meta.plugins.is_empty();
 
-            let mut result = format!(
-                "<b>Skills</b>  ·  {count}\n\n{list}"
-            );
+            if !has_any {
+                return bot
+                    .send_html(
+                        chat_id,
+                        thread_id,
+                        "<b>Skills</b>\n\nNo skills available.",
+                    )
+                    .await
+                    .map(|_| ());
+            }
 
-            // Also show agents if available
+            // Skills (user-defined)
+            if !info.meta.skills.is_empty() {
+                let count = info.meta.skills.len();
+                let list: String = info
+                    .meta
+                    .skills
+                    .iter()
+                    .map(|s| format!("  <code>{}</code>", html_escape(s)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                result.push_str(&format!("<b>Skills</b>  ·  {count}\n\n{list}"));
+            }
+
+            // Slash commands (all available)
+            if !info.meta.slash_commands.is_empty() {
+                let count = info.meta.slash_commands.len();
+                let list: String = info
+                    .meta
+                    .slash_commands
+                    .iter()
+                    .map(|s| format!("  <code>/{}</code>", html_escape(s)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !result.is_empty() {
+                    result.push_str("\n\n");
+                }
+                result.push_str(&format!("<b>Slash Commands</b>  ·  {count}\n\n{list}"));
+            }
+
+            // Agents
             if !info.meta.agents.is_empty() {
-                let agent_count = info.meta.agents.len();
-                let agent_list: String = info
+                let count = info.meta.agents.len();
+                let list: String = info
                     .meta
                     .agents
                     .iter()
                     .map(|a| format!("  <code>{}</code>", html_escape(a)))
                     .collect::<Vec<_>>()
                     .join("\n");
-                result.push_str(&format!(
-                    "\n\n<b>Agents</b>  ·  {agent_count}\n\n{agent_list}"
-                ));
+                if !result.is_empty() {
+                    result.push_str("\n\n");
+                }
+                result.push_str(&format!("<b>Agents</b>  ·  {count}\n\n{list}"));
+            }
+
+            // Plugins
+            if !info.meta.plugins.is_empty() {
+                let count = info.meta.plugins.len();
+                let list: String = info
+                    .meta
+                    .plugins
+                    .iter()
+                    .map(|p| format!("  <code>{}</code>", html_escape(&p.name)))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !result.is_empty() {
+                    result.push_str("\n\n");
+                }
+                result.push_str(&format!("<b>Plugins</b>  ·  {count}\n\n{list}"));
             }
 
             result
         }
-        Some(_) => "<b>Skills</b>\n\nNo skills available.".to_string(),
-        None => {
-            "<b>Skills</b>\n\n<i>No data yet — send a message first.</i>".to_string()
-        }
+        None => "<b>Skills</b>\n\n<i>No data yet — send a message first.</i>".to_string(),
     };
 
     bot.send_html(chat_id, thread_id, &truncate_for_telegram(&html)).await?;

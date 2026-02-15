@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::types::{McpServerInfo, SessionMeta, UsageInfo};
+use crate::types::{McpServerInfo, PluginInfo, SessionMeta, UsageInfo};
 
 /// Result of parsing a single stream-json line from Claude CLI.
 #[derive(Debug, Default)]
@@ -216,20 +216,60 @@ fn parse_init_meta(event: &serde_json::Map<String, Value>) -> Option<SessionMeta
         })
         .unwrap_or_default();
 
+    let plugins = event
+        .get("plugins")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let obj = v.as_object()?;
+                    Some(PluginInfo {
+                        name: obj.get("name")?.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Some(SessionMeta {
         model: str_field("model"),
         version: str_field("claude_code_version"),
         permission_mode: str_field("permissionMode"),
+        cwd: str_field("cwd"),
         tools: str_array("tools"),
         mcp_servers,
         skills: str_array("skills"),
         agents: str_array("agents"),
+        slash_commands: str_array("slash_commands"),
+        plugins,
+        fast_mode_state: str_field("fast_mode_state"),
+        api_key_source: str_field("apiKeySource"),
     })
 }
 
 /// Extract usage/cost from a `{"type":"result",...}` event.
 fn parse_result_usage(event: &serde_json::Map<String, Value>) -> Option<UsageInfo> {
     let usage = event.get("usage").and_then(|v| v.as_object())?;
+
+    // Extract contextWindow and maxOutputTokens from modelUsage (first model entry)
+    let (context_window, max_output_tokens) = event
+        .get("modelUsage")
+        .and_then(|v| v.as_object())
+        .and_then(|mu| mu.values().next())
+        .and_then(|v| v.as_object())
+        .map(|model| {
+            let cw = model
+                .get("contextWindow")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let mo = model
+                .get("maxOutputTokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            (cw, mo)
+        })
+        .unwrap_or((0, 0));
+
     Some(UsageInfo {
         input_tokens: usage
             .get("input_tokens")
@@ -251,6 +291,8 @@ fn parse_result_usage(event: &serde_json::Map<String, Value>) -> Option<UsageInf
             .get("total_cost_usd")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0),
+        context_window,
+        max_output_tokens,
     })
 }
 
