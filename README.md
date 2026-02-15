@@ -13,6 +13,8 @@ streaming message edits, resumable sessions, and local persistence.
   - Claude: `--resume <session_id>`
   - Codex: `codex exec resume <session_id> ...`
 - Commands:
+  - `/start`
+  - `/help`
   - `/new_thread`
   - `/resume <session_id>`
   - `/clear`
@@ -58,11 +60,38 @@ Set values in `.env`:
 
 - `TELEGRAM_BOT_TOKEN`: bot token
 - `ALLOWED_TELEGRAM_USER_IDS`: comma-separated allowed Telegram numeric user IDs
+- `ALLOWED_TELEGRAM_CHAT_IDS`: optional comma list for extra chat-level lock
+- `BLOCK_NON_PRIVATE_CHATS`: when true, reject all non-private chats
 - `DEFAULT_ENGINE`: `claude` or `codex`
 - `CLAUDE_SAFE_ALLOWED_TOOLS`: comma list passed into `--allowedTools` in safe mode
 - `DEFAULT_TOOL_MODE`: `safe` or `full`
 - `WORKSPACE_ROOT`, `DB_PATH`, `LOGS_ROOT`
+- `TELEGRAM_CA_BUNDLE`: optional custom CA bundle file path
 - `GH_TOKEN` or `GITHUB_TOKEN` for non-interactive GitHub operations
+
+## Professional Bot Setup
+
+1. Configure Telegram bot profile metadata and command menu:
+
+```bash
+python3 scripts/configure_telegram_bot.py
+```
+
+2. Generate avatar image files from SVG:
+
+```bash
+./scripts/export_avatar_image.sh
+```
+
+3. Print BotFather hardening steps and execute them in `@BotFather`:
+
+```bash
+python3 scripts/print_botfather_private_setup.py
+```
+
+Reference asset:
+
+- `assets/private-coder-bot.svg`
 
 ## Operational Notes
 
@@ -101,6 +130,8 @@ launchctl start com.octaviusp.telecode-bot
 ## Security Defaults
 
 - User allowlist enforced (`ALLOWED_TELEGRAM_USER_IDS`)
+- Optional chat allowlist (`ALLOWED_TELEGRAM_CHAT_IDS`)
+- Optional private-chat-only enforcement (`BLOCK_NON_PRIVATE_CHATS=true`)
 - Safe tool mode default for Claude
 - Per-run timeout (`MAX_RUNTIME_SECONDS`)
 - Run logs persisted for auditing
