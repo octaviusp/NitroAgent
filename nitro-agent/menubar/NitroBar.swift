@@ -16,10 +16,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
 
-    /// Load and resize icon for menu bar (18x18pt).
+    /// Load and resize icon for menu bar (22x22pt, full opacity).
     private func loadMenuBarIcon() -> NSImage? {
         guard let img = NSImage(contentsOfFile: kIconPath) else { return nil }
-        let size = NSSize(width: 18, height: 18)
+        let size = NSSize(width: 22, height: 22)
         let resized = NSImage(size: size)
         resized.lockFocus()
         img.draw(in: NSRect(origin: .zero, size: size),
@@ -31,7 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: 28)
         if let btn = statusItem.button, let icon = loadMenuBarIcon() {
             btn.image = icon
             btn.imagePosition = .imageOnly
@@ -94,9 +94,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         self.statusItem.menu = menu
 
-        // Update icon opacity based on status (full = running, dimmed = stopped)
+        // Always full opacity
         if let btn = self.statusItem.button {
-            btn.alphaValue = running ? 1.0 : 0.4
+            btn.alphaValue = 1.0
         }
     }
 
