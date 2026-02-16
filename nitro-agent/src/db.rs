@@ -210,6 +210,19 @@ impl ThreadStore {
         Ok(())
     }
 
+    pub async fn reset_workspace(&self, thread_key: &str) -> Result<PathBuf, sqlx::Error> {
+        let fresh = self.fresh_workspace(thread_key);
+        sqlx::query(
+            "UPDATE threads SET workspace_path = ?, updated_at = ? WHERE thread_key = ?",
+        )
+        .bind(fresh.to_string_lossy().as_ref())
+        .bind(utc_now())
+        .bind(thread_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(fresh)
+    }
+
     pub async fn clear_thread_state(&self, thread_key: &str) -> Result<ThreadState, sqlx::Error> {
         let fresh = self.fresh_workspace(thread_key);
         let settings = ThreadSettings {

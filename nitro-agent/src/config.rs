@@ -57,9 +57,21 @@ impl BotConfig {
             return Err("DEFAULT_TOOL_MODE must be safe or full".into());
         }
 
-        let db_path = PathBuf::from(env_or("DB_PATH", "data/nitro_agent.db"));
-        let workspace_root = PathBuf::from(env_or("WORKSPACE_ROOT", "workspaces"));
-        let logs_root = PathBuf::from(env_or("LOGS_ROOT", "logs"));
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let base_dir = format!("{home}/.nitro-agent");
+
+        let db_path = resolve_to_absolute(PathBuf::from(env_or(
+            "DB_PATH",
+            &format!("{base_dir}/data/nitro_agent.db"),
+        )));
+        let workspace_root = resolve_to_absolute(PathBuf::from(env_or(
+            "WORKSPACE_ROOT",
+            &format!("{base_dir}/workspaces"),
+        )));
+        let logs_root = resolve_to_absolute(PathBuf::from(env_or(
+            "LOGS_ROOT",
+            &format!("{base_dir}/logs"),
+        )));
 
         // Ensure directories exist
         if let Some(parent) = db_path.parent() {
