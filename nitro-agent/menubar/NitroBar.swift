@@ -155,30 +155,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // ─── Actions ────────────────────────────────────────────────────
 
     @objc private func startBot() {
-        // Try launchctl first if plist installed
-        if FileManager.default.fileExists(atPath: kPlistDest) {
-            shell("launchctl", "load", kPlistDest)
-        } else {
-            // Direct launch
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: kBinaryPath)
-            task.currentDirectoryURL = URL(fileURLWithPath: kProjectDir)
-            task.environment = buildEnv()
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            task.arguments = []
-            try? task.run()
-        }
+        // Always direct launch with full .env for reliability
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: kBinaryPath)
+        task.currentDirectoryURL = URL(fileURLWithPath: kProjectDir)
+        task.environment = buildEnv()
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        task.arguments = []
+        try? task.run()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.rebuildMenu()
         }
     }
 
     @objc private func stopBot() {
-        if FileManager.default.fileExists(atPath: kPlistDest) {
-            shell("launchctl", "unload", kPlistDest)
-        }
-        // Also kill any direct instances
+        // Unload from launchd first to prevent KeepAlive restart
+        shell("launchctl", "unload", kPlistDest)
+        // Kill any running process (direct or launchd-spawned)
         if let pid = getPid() {
             shell("kill", String(pid))
         }
@@ -200,9 +194,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             shell("launchctl", "unload", kPlistDest)
             try? FileManager.default.removeItem(atPath: kPlistDest)
         } else {
-            // Enable: copy plist + load
+            // Enable: install plist (macOS auto-loads ~/Library/LaunchAgents on login)
             installPlist()
-            shell("launchctl", "load", kPlistDest)
+            // Start bot now if not already running
+            if !isRunning() {
+                startBot()
+            }
         }
         rebuildMenu()
     }
