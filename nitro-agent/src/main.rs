@@ -214,6 +214,22 @@ async fn main() {
                         continue;
                     };
 
+                    // Extract reply-to context (quoted message)
+                    let reply_text = msg.reply_to_message().and_then(|r| {
+                        r.text().map(|t| t.to_string()).or_else(|| {
+                            r.caption().map(|c| c.to_string())
+                        })
+                    });
+
+                    // Extract forwarded message text
+                    let forwarded_text = if msg.forward_origin().is_some() {
+                        msg.text()
+                            .map(|t| t.to_string())
+                            .or_else(|| msg.caption().map(|c| c.to_string()))
+                    } else {
+                        None
+                    };
+
                     let thread_key = ThreadKey::new(chat_id, thread_id);
                     let command = parse_command(&text);
 
@@ -226,6 +242,8 @@ async fn main() {
                             thread_id,
                             voice_file_id,
                             photo_file_id,
+                            reply_text,
+                            forwarded_text,
                         },
                         command,
                     };

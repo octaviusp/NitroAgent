@@ -24,6 +24,35 @@ use crate::voice;
 /// Braille spinner frames for animated streaming indicator.
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/// Prepend reply/forward context to the user's prompt so Claude
+/// sees the referenced message inline.
+fn build_context_prompt(
+    prompt: &str,
+    reply_text: &Option<String>,
+    forwarded_text: &Option<String>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    if let Some(fwd) = forwarded_text {
+        parts.push(format!("[Forwarded message]\n{fwd}\n[/Forwarded message]"));
+        // Forwarded text IS the message text — don't repeat it.
+        if fwd == prompt {
+            return parts.join("\n\n");
+        }
+    }
+
+    if let Some(reply) = reply_text {
+        parts.push(format!("[Quoted message]\n{reply}\n[/Quoted message]"));
+    }
+
+    if parts.is_empty() {
+        return prompt.to_string();
+    }
+
+    parts.push(prompt.to_string());
+    parts.join("\n\n")
+}
+
 /// Core bot logic shared across workers.
 pub struct BotCore {
     pub config: BotConfig,
@@ -304,6 +333,13 @@ impl BotCore {
         } else {
             task.message.text.clone()
         };
+
+        // Prepend reply/forward context to prompt
+        let prompt = build_context_prompt(
+            &prompt,
+            &task.message.reply_text,
+            &task.message.forwarded_text,
+        );
 
         self.run_user_prompt(
             thread_key,

@@ -50,6 +50,10 @@ pub struct MessageContext {
     pub voice_file_id: Option<String>,
     /// Telegram file_id for a photo attachment (downloaded in worker, not poller).
     pub photo_file_id: Option<String>,
+    /// Text from a quoted/replied-to message (reply_to_message).
+    pub reply_text: Option<String>,
+    /// Text from a forwarded message body.
+    pub forwarded_text: Option<String>,
 }
 
 /// A task enqueued for a thread worker.
