@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 
-use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+use teloxide::payloads::SendMessageSetters;
+use teloxide::prelude::*;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 use crate::bot::{html_escape, truncate_for_telegram, BotCore};
+use crate::menu;
 use crate::types::{CachedClaudeInfo, ParsedCommand, ThreadState};
 
 /// Handle all slash commands. Returns true if the command was handled.
@@ -74,7 +77,7 @@ pub async fn handle_command(
 async fn handle_start(
     bot: &BotCore,
     chat_id: i64,
-    thread_id: Option<i64>,
+    _thread_id: Option<i64>,
     thread_key: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cache = bot.info_cache.read().await;
@@ -101,12 +104,18 @@ Ultra-fast macOS remote-agent
 <b>Version</b>  <code>{version}</code>
 <b>Mode</b>     <code>{perm}</code>
 
-Type /help for commands.",
+Type /help for commands or use the buttons below.",
         model = html_escape(model),
         version = html_escape(version),
         perm = html_escape(perm),
     );
-    bot.send_html(chat_id, thread_id, &html).await?;
+    // Send with persistent reply keyboard so buttons appear at bottom of chat
+    let kb = menu::persistent_keyboard();
+    bot.tg
+        .send_message(ChatId(chat_id), &html)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(kb)
+        .await?;
     Ok(())
 }
 

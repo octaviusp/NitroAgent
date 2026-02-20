@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod engine;
 mod format;
+mod menu;
 mod stream;
 #[allow(dead_code)]
 mod types;
@@ -13,7 +14,7 @@ mod worker;
 use std::sync::Arc;
 
 use teloxide::prelude::*;
-use teloxide::types::{MaybeInaccessibleMessage, UpdateKind};
+use teloxide::types::{AllowedUpdate, MaybeInaccessibleMessage, UpdateKind};
 use tracing::{error, info, warn};
 
 use crate::bot::BotCore;
@@ -90,6 +91,13 @@ async fn main() {
     let bot_core = Arc::new(BotCore::new(config, store, tg.clone()));
     let registry = Arc::new(WorkerRegistry::new(bot_core.clone()));
 
+    // Register bot commands with Telegram's command menu
+    if let Err(e) = tg.set_my_commands(menu::bot_commands()).await {
+        warn!("Failed to set bot commands: {e}");
+    } else {
+        info!("Bot commands registered");
+    }
+
     info!("Polling for updates...");
 
     // Long-polling loop
@@ -101,7 +109,9 @@ async fn main() {
         if let Some(off) = offset {
             req = req.offset(off);
         }
-        req = req.timeout(poll_timeout);
+        req = req
+            .timeout(poll_timeout)
+            .allowed_updates(vec![AllowedUpdate::Message, AllowedUpdate::CallbackQuery]);
 
         match req.await {
             Ok(updates) => {
@@ -231,6 +241,43 @@ async fn main() {
                     };
 
                     let thread_key = ThreadKey::new(chat_id, thread_id);
+
+                    // Match persistent reply keyboard buttons → execute as command
+                    if let Some(cmd_text) = menu::match_keyboard_button(&text) {
+                        let command = parse_command(cmd_text);
+                        let task = IncomingTask {
+                            message: MessageContext {
+                                chat_id,
+                                user_id: user.id.0,
+                                text: cmd_text.to_string(),
+                                message_id: msg.id.0,
+                                thread_id,
+                                voice_file_id: None,
+                                photo_file_id: None,
+                            },
+                            command,
+                        };
+
+                        // Cancel is handled inline for immediate response
+                        if cmd_text == "/cancel" {
+                            let worker = registry.get_or_create(&thread_key).await;
+                            let cancelled = worker.cancel_current().await;
+                            let reply = if cancelled {
+                                "<b>Run canceled</b>\nStopping current execution."
+                            } else {
+                                "<b>No active run</b>\nNothing to cancel."
+                            };
+                            let _ = bot_core.send_html(chat_id, thread_id, reply).await;
+                            continue;
+                        }
+
+                        let worker = registry.get_or_create(&thread_key).await;
+                        if let Err(e) = worker.enqueue(task) {
+                            error!("Failed to enqueue keyboard task: {e}");
+                        }
+                        continue;
+                    }
+
                     let command = parse_command(&text);
 
                     let task = IncomingTask {
