@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// Typed configuration loaded from environment variables.
+/// Typed configuration loaded from environment variables or agents.toml.
 #[derive(Debug, Clone)]
 pub struct BotConfig {
+    pub agent_name: String,
     pub telegram_bot_token: String,
     pub allowed_user_ids: HashSet<u64>,
     pub default_engine: String,
@@ -101,6 +102,7 @@ impl BotConfig {
         std::fs::create_dir_all(&logs_root).map_err(|e| format!("create logs dir: {e}"))?;
 
         Ok(Self {
+            agent_name: "default".to_string(),
             telegram_bot_token: token,
             allowed_user_ids,
             allowed_group_ids,
@@ -134,7 +136,7 @@ impl BotConfig {
 
 /// Resolve claude binary to an absolute path at startup.
 /// Checks PATH via `which`, then well-known install locations.
-fn resolve_claude_bin() -> String {
+pub fn resolve_claude_bin() -> String {
     let name = env_or("CLAUDE_BIN", "claude");
 
     // Already absolute — use as-is if it exists
@@ -182,7 +184,7 @@ fn resolve_claude_bin() -> String {
 }
 
 /// Resolve python binary to an absolute path at startup so CWD changes don't break it.
-fn resolve_sst_python() -> String {
+pub fn resolve_sst_python() -> String {
     let explicit = env_or("SST_PYTHON", "");
     if !explicit.is_empty() {
         let p = PathBuf::from(&explicit);
@@ -202,7 +204,7 @@ fn resolve_sst_python() -> String {
 }
 
 /// Resolve sst.py script to an absolute path at startup.
-fn resolve_sst_script() -> PathBuf {
+pub fn resolve_sst_script() -> PathBuf {
     let explicit = env_or("SST_SCRIPT", "");
     let path = if !explicit.is_empty() {
         PathBuf::from(explicit)
@@ -214,7 +216,7 @@ fn resolve_sst_script() -> PathBuf {
 
 /// Convert a relative path to absolute using canonicalize (if file exists)
 /// or CWD join (if file doesn't exist yet). Ensures the path survives CWD changes.
-fn resolve_to_absolute(path: PathBuf) -> PathBuf {
+pub fn resolve_to_absolute(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
     }
@@ -254,7 +256,7 @@ fn env_or(key: &str, default: &str) -> String {
         .unwrap_or_else(|_| default.to_string())
 }
 
-fn parse_tool_list(value: &str) -> Vec<String> {
+pub fn parse_tool_list(value: &str) -> Vec<String> {
     value
         .split(',')
         .map(|s| s.trim().to_string())
