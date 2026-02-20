@@ -18,6 +18,9 @@ pub struct BotConfig {
     pub claude_bin: String,
     pub claude_safe_allowed_tools: Vec<String>,
     pub claude_full_allowed_tools: Vec<String>,
+    // ── Group chat ──
+    pub allowed_group_ids: HashSet<i64>,
+    pub bot_to_bot_max_turns: u32,
     // ── Speech-to-text (sst.py) ──
     pub sst_python: String,
     pub sst_script: PathBuf,
@@ -46,6 +49,22 @@ impl BotConfig {
         if allowed_user_ids.is_empty() {
             return Err("ALLOWED_TELEGRAM_USER_IDS must contain at least one valid ID".into());
         }
+
+        let allowed_group_ids: HashSet<i64> = env_or("ALLOWED_GROUP_IDS", "")
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse::<i64>().ok()
+                }
+            })
+            .collect();
+
+        let bot_to_bot_max_turns: u32 = env_or("BOT_TO_BOT_MAX_TURNS", "5")
+            .parse()
+            .unwrap_or(5);
 
         let default_engine = env_or("DEFAULT_ENGINE", "claude").to_lowercase();
         if default_engine != "claude" {
@@ -84,6 +103,8 @@ impl BotConfig {
         Ok(Self {
             telegram_bot_token: token,
             allowed_user_ids,
+            allowed_group_ids,
+            bot_to_bot_max_turns,
             default_engine,
             default_tool_mode,
             poll_timeout_seconds: env_or("POLL_TIMEOUT_SECONDS", "25").parse().unwrap_or(25),

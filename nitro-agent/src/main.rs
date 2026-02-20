@@ -10,11 +10,12 @@ mod types;
 mod voice;
 mod worker;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use teloxide::prelude::*;
-use teloxide::types::{MaybeInaccessibleMessage, UpdateKind};
-use tracing::{error, info, warn};
+use teloxide::types::{MaybeInaccessibleMessage, MessageEntityKind, UpdateKind};
+use tracing::{debug, error, info, warn};
 
 use crate::bot::BotCore;
 use crate::commands::parse_command;
@@ -86,7 +87,20 @@ async fn main() {
         info!("Webhook cleared");
     }
 
+    // Get bot's own identity for mention detection in groups
+    let me = tg.get_me().await.expect("Failed to call getMe");
+    let bot_id = me.id.0;
+    let bot_username = me.username.clone().unwrap_or_default().to_lowercase();
+    info!(bot_id, bot_username = %bot_username, "Bot identity resolved");
+
     let allowed_user_ids = config.allowed_user_ids.clone();
+    let allowed_group_ids = config.allowed_group_ids.clone();
+    let bot_to_bot_max_turns = config.bot_to_bot_max_turns;
+
+    if !allowed_group_ids.is_empty() {
+        info!(groups = ?allowed_group_ids, max_turns = bot_to_bot_max_turns, "Group chat enabled");
+    }
+
     let bot_core = Arc::new(BotCore::new(config, store, tg.clone()));
     let registry = Arc::new(WorkerRegistry::new(bot_core.clone()));
 
@@ -95,6 +109,8 @@ async fn main() {
     // Long-polling loop
     let mut offset: Option<i32> = None;
     let poll_timeout = bot_core.config.poll_timeout_seconds as u32;
+    // Track bot-to-bot turn count per group (reset when a human speaks)
+    let mut bot_turns: HashMap<i64, u32> = HashMap::new();
 
     loop {
         let mut req = tg.get_updates();
@@ -177,12 +193,76 @@ async fn main() {
                         None => continue,
                     };
 
-                    // Access control
-                    if !allowed_user_ids.contains(&user.id.0) {
-                        continue;
-                    }
-
                     let chat_id = msg.chat.id.0;
+                    let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+
+                    // ── Access control & group routing ──
+                    if is_group {
+                        // Group chat: check allowed_group_ids
+                        if !allowed_group_ids.contains(&chat_id) {
+                            debug!(chat_id, "Group not in allowed list, skipping");
+                            continue;
+                        }
+
+                        let sender_is_bot = user.is_bot;
+
+                        // Parse @mentions from message entities
+                        let mentioned_usernames: Vec<String> = msg
+                            .entities()
+                            .unwrap_or_default()
+                            .iter()
+                            .filter_map(|ent| {
+                                if let MessageEntityKind::Mention = &ent.kind {
+                                    // Extract @username from text (offset includes the @)
+                                    msg.text().and_then(|txt| {
+                                        let start = ent.offset;
+                                        let end = start + ent.length;
+                                        txt.get(start..end).map(|s| {
+                                            s.trim_start_matches('@').to_lowercase()
+                                        })
+                                    })
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        let we_are_mentioned = mentioned_usernames
+                            .iter()
+                            .any(|u| u == &bot_username);
+                        let has_mentions = !mentioned_usernames.is_empty();
+
+                        if sender_is_bot {
+                            // Bot-to-bot: only respond if explicitly @mentioned
+                            if !we_are_mentioned {
+                                debug!(chat_id, from = user.id.0, "Bot msg without our mention, skipping");
+                                continue;
+                            }
+                            // Check turn limit
+                            let turns = bot_turns.entry(chat_id).or_insert(0);
+                            if bot_to_bot_max_turns > 0 && *turns >= bot_to_bot_max_turns {
+                                debug!(chat_id, turns = *turns, "Bot-to-bot turn limit reached");
+                                continue;
+                            }
+                            *turns += 1;
+                            debug!(chat_id, turn = *turns, "Bot-to-bot turn accepted");
+                        } else {
+                            // Human message: reset bot-to-bot counter
+                            bot_turns.remove(&chat_id);
+
+                            // If human @mentions a specific bot that isn't us, skip
+                            if has_mentions && !we_are_mentioned {
+                                debug!(chat_id, mentions = ?mentioned_usernames, "Human mentioned other bot, skipping");
+                                continue;
+                            }
+                            // Human with no mention or with @us → process
+                        }
+                    } else {
+                        // Private chat: original access control
+                        if !allowed_user_ids.contains(&user.id.0) {
+                            continue;
+                        }
+                    }
                     let thread_id = msg.thread_id.map(|tid| tid.0 .0 as i64);
 
                     // Extract text, voice file_id, or photo file_id (download happens in worker)
