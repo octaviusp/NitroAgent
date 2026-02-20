@@ -68,27 +68,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var timer: Timer?
 
-    /// Load and resize icon for menu bar (22x22pt, full opacity).
-    private func loadMenuBarIcon() -> NSImage? {
+    /// Build menu bar icon with a small status dot (green=running, gray=stopped).
+    private func menuBarIcon(running: Bool) -> NSImage? {
         guard let img = NSImage(contentsOfFile: kIconPath) else { return nil }
         let size = NSSize(width: 22, height: 22)
-        let resized = NSImage(size: size)
-        resized.lockFocus()
+        let result = NSImage(size: size)
+        result.lockFocus()
+
+        // Draw base icon (dimmed when stopped)
         img.draw(in: NSRect(origin: .zero, size: size),
                  from: NSRect(origin: .zero, size: img.size),
-                 operation: .copy, fraction: 1.0)
-        resized.unlockFocus()
-        resized.isTemplate = false  // keep original colors (red lightning)
-        return resized
+                 operation: .copy, fraction: running ? 1.0 : 0.45)
+
+        // Status dot (6x6 in bottom-right corner)
+        let dotSize: CGFloat = 6
+        let dotRect = NSRect(x: size.width - dotSize - 1,
+                             y: 1,
+                             width: dotSize, height: dotSize)
+        let color: NSColor = running
+            ? NSColor(calibratedRed: 0.3, green: 0.85, blue: 0.4, alpha: 1.0)
+            : NSColor(calibratedWhite: 0.55, alpha: 1.0)
+        color.setFill()
+        NSBezierPath(ovalIn: dotRect).fill()
+
+        result.unlockFocus()
+        result.isTemplate = false
+        return result
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: 28)
-        if let btn = statusItem.button, let icon = loadMenuBarIcon() {
-            btn.image = icon
+        if let btn = statusItem.button {
             btn.imagePosition = .imageOnly
-        } else if let btn = statusItem.button {
-            btn.title = "⚡"  // fallback
         }
 
         rebuildMenu()
@@ -102,6 +113,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
         let running = isRunning()
+
+        // Update icon with status dot
+        if let btn = statusItem.button {
+            if let icon = menuBarIcon(running: running) {
+                btn.image = icon
+            } else {
+                btn.title = running ? "⚡" : "⚡○"
+            }
+        }
 
         // ── Status ──
         let statusTitle = running ? "● Running" : "○ Stopped"
@@ -155,30 +175,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // ─── Actions ────────────────────────────────────────────────────
 
     @objc private func startBot() {
-        // Try launchctl first if plist installed
-        if FileManager.default.fileExists(atPath: kPlistDest) {
-            shell("launchctl", "load", kPlistDest)
-        } else {
-            // Direct launch
-            let task = Process()
-            task.executableURL = URL(fileURLWithPath: kBinaryPath)
-            task.currentDirectoryURL = URL(fileURLWithPath: kProjectDir)
-            task.environment = buildEnv()
-            task.standardOutput = FileHandle.nullDevice
-            task.standardError = FileHandle.nullDevice
-            task.arguments = []
-            try? task.run()
-        }
+        // Always direct launch with full .env for reliability
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: kBinaryPath)
+        task.currentDirectoryURL = URL(fileURLWithPath: kProjectDir)
+        task.environment = buildEnv()
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        task.arguments = []
+        try? task.run()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             self?.rebuildMenu()
         }
     }
 
     @objc private func stopBot() {
-        if FileManager.default.fileExists(atPath: kPlistDest) {
-            shell("launchctl", "unload", kPlistDest)
-        }
-        // Also kill any direct instances
+        // Unload from launchd first to prevent KeepAlive restart
+        shell("launchctl", "unload", kPlistDest)
+        // Kill any running process (direct or launchd-spawned)
         if let pid = getPid() {
             shell("kill", String(pid))
         }
@@ -200,9 +214,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             shell("launchctl", "unload", kPlistDest)
             try? FileManager.default.removeItem(atPath: kPlistDest)
         } else {
-            // Enable: copy plist + load
+            // Enable: install plist (macOS auto-loads ~/Library/LaunchAgents on login)
             installPlist()
-            shell("launchctl", "load", kPlistDest)
+            // Start bot now if not already running
+            if !isRunning() {
+                startBot()
+            }
         }
         rebuildMenu()
     }

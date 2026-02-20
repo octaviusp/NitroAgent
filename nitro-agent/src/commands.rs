@@ -160,6 +160,7 @@ async fn handle_new_thread(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     bot.store.set_active_session(thread_key, None).await?;
     bot.store.set_compact_summary(thread_key, None).await?;
+    let fresh = bot.store.reset_workspace(thread_key).await?;
     // Reset accumulated usage for fresh session
     {
         let mut cache = bot.info_cache.write().await;
@@ -168,7 +169,10 @@ async fn handle_new_thread(
     bot.send_html(
         chat_id,
         thread_id,
-        "✅ <b>Fresh session</b>\nMemory and session cleared.",
+        &format!(
+            "✅ <b>Fresh session</b>\nMemory and session cleared.\nWorkspace: <code>{}</code>",
+            html_escape(&fresh.to_string_lossy()),
+        ),
     )
     .await?;
     Ok(())

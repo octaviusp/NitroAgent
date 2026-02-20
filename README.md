@@ -49,6 +49,20 @@ cp .env.example .env
 ./target/release/nitro-agent
 ```
 
+### Run as Background Service (recommended)
+
+```bash
+cd nitro-agent
+bash install-service.sh
+```
+
+Installs NitroAgent as a macOS `launchd` service. The bot starts automatically on login and restarts on crash — no GUI, no menu bar icon, zero overhead.
+
+```bash
+bash install-service.sh --status   # check if running
+bash uninstall-service.sh          # stop and remove service
+```
+
 ### Menu Bar App (optional)
 
 ```bash
