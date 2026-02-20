@@ -86,19 +86,14 @@ impl ThreadStore {
         Ok(())
     }
 
-    fn default_workspace(&self, thread_key: &str) -> PathBuf {
-        let slug = thread_key.replace(':', "_");
-        let path = self.workspace_root.join(slug);
-        std::fs::create_dir_all(&path).ok();
-        path
+    fn default_workspace(&self, _thread_key: &str) -> PathBuf {
+        std::fs::create_dir_all(&self.workspace_root).ok();
+        self.workspace_root.clone()
     }
 
-    fn fresh_workspace(&self, thread_key: &str) -> PathBuf {
-        let slug = thread_key.replace(':', "_");
-        let ts = utc_now_compact();
-        let path = self.workspace_root.join(format!("{slug}-{ts}"));
-        std::fs::create_dir_all(&path).ok();
-        path
+    fn fresh_workspace(&self, _thread_key: &str) -> PathBuf {
+        std::fs::create_dir_all(&self.workspace_root).ok();
+        self.workspace_root.clone()
     }
 
     pub async fn get_or_create_thread(&self, thread_key: &str) -> Result<ThreadState, sqlx::Error> {
@@ -373,6 +368,3 @@ fn utc_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
-fn utc_now_compact() -> String {
-    chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
-}
