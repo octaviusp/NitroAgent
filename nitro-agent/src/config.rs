@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-/// Typed configuration loaded from environment variables.
+/// Typed configuration loaded from environment variables or agents.toml.
 #[derive(Debug, Clone)]
 pub struct BotConfig {
+    pub agent_name: String,
     pub telegram_bot_token: String,
     pub allowed_user_ids: HashSet<u64>,
     pub default_engine: String,
@@ -18,6 +19,9 @@ pub struct BotConfig {
     pub claude_bin: String,
     pub claude_safe_allowed_tools: Vec<String>,
     pub claude_full_allowed_tools: Vec<String>,
+    // ── Group chat ──
+    pub allowed_group_ids: HashSet<i64>,
+    pub bot_to_bot_max_turns: u32,
     // ── Speech-to-text (sst.py) ──
     pub sst_python: String,
     pub sst_script: PathBuf,
@@ -46,6 +50,22 @@ impl BotConfig {
         if allowed_user_ids.is_empty() {
             return Err("ALLOWED_TELEGRAM_USER_IDS must contain at least one valid ID".into());
         }
+
+        let allowed_group_ids: HashSet<i64> = env_or("ALLOWED_GROUP_IDS", "")
+            .split(',')
+            .filter_map(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    trimmed.parse::<i64>().ok()
+                }
+            })
+            .collect();
+
+        let bot_to_bot_max_turns: u32 = env_or("BOT_TO_BOT_MAX_TURNS", "5")
+            .parse()
+            .unwrap_or(5);
 
         let default_engine = env_or("DEFAULT_ENGINE", "claude").to_lowercase();
         if default_engine != "claude" {
@@ -82,8 +102,11 @@ impl BotConfig {
         std::fs::create_dir_all(&logs_root).map_err(|e| format!("create logs dir: {e}"))?;
 
         Ok(Self {
+            agent_name: "default".to_string(),
             telegram_bot_token: token,
             allowed_user_ids,
+            allowed_group_ids,
+            bot_to_bot_max_turns,
             default_engine,
             default_tool_mode,
             poll_timeout_seconds: env_or("POLL_TIMEOUT_SECONDS", "25").parse().unwrap_or(25),
@@ -113,7 +136,7 @@ impl BotConfig {
 
 /// Resolve claude binary to an absolute path at startup.
 /// Checks PATH via `which`, then well-known install locations.
-fn resolve_claude_bin() -> String {
+pub fn resolve_claude_bin() -> String {
     let name = env_or("CLAUDE_BIN", "claude");
 
     // Already absolute — use as-is if it exists
@@ -161,7 +184,7 @@ fn resolve_claude_bin() -> String {
 }
 
 /// Resolve python binary to an absolute path at startup so CWD changes don't break it.
-fn resolve_sst_python() -> String {
+pub fn resolve_sst_python() -> String {
     let explicit = env_or("SST_PYTHON", "");
     if !explicit.is_empty() {
         let p = PathBuf::from(&explicit);
@@ -181,7 +204,7 @@ fn resolve_sst_python() -> String {
 }
 
 /// Resolve sst.py script to an absolute path at startup.
-fn resolve_sst_script() -> PathBuf {
+pub fn resolve_sst_script() -> PathBuf {
     let explicit = env_or("SST_SCRIPT", "");
     let path = if !explicit.is_empty() {
         PathBuf::from(explicit)
@@ -193,7 +216,7 @@ fn resolve_sst_script() -> PathBuf {
 
 /// Convert a relative path to absolute using canonicalize (if file exists)
 /// or CWD join (if file doesn't exist yet). Ensures the path survives CWD changes.
-fn resolve_to_absolute(path: PathBuf) -> PathBuf {
+pub fn resolve_to_absolute(path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         return path;
     }
@@ -233,7 +256,7 @@ fn env_or(key: &str, default: &str) -> String {
         .unwrap_or_else(|_| default.to_string())
 }
 
-fn parse_tool_list(value: &str) -> Vec<String> {
+pub fn parse_tool_list(value: &str) -> Vec<String> {
     value
         .split(',')
         .map(|s| s.trim().to_string())
