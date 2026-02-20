@@ -613,6 +613,7 @@ impl BotCore {
             "CLAUDECODE",
             "CLAUDE_CODE_ENTRYPOINT",
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+            "ANTHROPIC_API_KEY",
         ] {
             env.remove(*key);
         }
@@ -1077,6 +1078,7 @@ impl BotCore {
             "CLAUDECODE",
             "CLAUDE_CODE_ENTRYPOINT",
             "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS",
+            "ANTHROPIC_API_KEY",
         ] {
             env.remove(*key);
         }
