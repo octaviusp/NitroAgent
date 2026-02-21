@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 /// Typed configuration loaded from environment variables or agents.toml.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BotConfig {
     pub agent_name: String,
     pub telegram_bot_token: String,

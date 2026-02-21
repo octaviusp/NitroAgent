@@ -152,8 +152,12 @@ pub fn split_for_telegram(text: &str, max_len: usize) -> Vec<String> {
             break;
         }
 
-        // Find a split point within max_len
-        let search_area = &remaining[..max_len];
+        // Find a char-safe split point within max_len
+        let mut safe_max = max_len;
+        while safe_max > 0 && !remaining.is_char_boundary(safe_max) {
+            safe_max -= 1;
+        }
+        let search_area = &remaining[..safe_max];
 
         // Try to split at \n\n first
         let split_at = search_area
