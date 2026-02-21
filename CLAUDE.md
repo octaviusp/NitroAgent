@@ -8,12 +8,15 @@ Ultra-fast optimized macOS remote-agent to code with Telegram. Rust-powered, bri
 
 ```
 nitro-agent/
-├── Cargo.toml              # Rust crate: teloxide, tokio, sqlx, serde, chrono, pulldown-cmark
+├── Cargo.toml              # Rust crate: teloxide, tokio, sqlx, serde, chrono, pulldown-cmark, toml
+├── agents.toml.example     # Multi-agent config template
 ├── src/
-│   ├── main.rs             # Entry: long-polling loop, message extraction, access control, callbacks
+│   ├── main.rs             # Entry: multi-agent launcher, polling loops, group chat routing, callbacks
 │   ├── bot.rs              # Core logic: process_task, engine streaming, Telegram messaging, keyboards
 │   ├── commands.rs         # Slash command handlers (/start, /help, /status, /mcp, etc.)
 │   ├── config.rs           # BotConfig from env, claude/python binary resolution
+│   ├── multi.rs            # Multi-agent TOML loader: agents.toml parsing, env var expansion
+│   ├── menu.rs             # Persistent reply keyboard: command buttons, bot command registration
 │   ├── db.rs               # SQLite: threads, runs, session_history tables
 │   ├── engine.rs           # Claude CLI command builder (stream-json, stdin piping)
 │   ├── format.rs           # Markdown-to-Telegram-HTML converter, message splitting
@@ -25,8 +28,8 @@ nitro-agent/
 │   └── NitroBar.swift      # macOS menu bar app for daemon start/stop/restart
 ├── docs/
 │   └── CLAUDE_CODE_SPEC.md # Claude Code CLI stream-json format reference
-├── data/                   # SQLite DB (nitro_agent.db)
-├── logs/                   # Per-thread run logs
+├── data/                   # SQLite DBs (per-agent in multi-agent mode)
+├── logs/                   # Per-agent run logs
 └── workspaces/             # Per-thread working directories for Claude execution
 ```
 
