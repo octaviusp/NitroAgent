@@ -3,3 +3,4 @@
 /logs/
 /workspaces/
 .env
+agents.toml

@@ -7,7 +7,26 @@ A Rust Telegram bot that acts as a private execution bridge to Claude Code CLI (
 ## 2. Architecture
 
 ```
-Telegram  ──getUpdates──▶  main.rs (poller + callback handler)
+                          agents.toml (optional)
+                          ┌─────────────────────────────────┐
+                          │ [agent.senku]  → Bot token A    │
+                          │ [agent.thalos] → Bot token B    │
+                          │ [agent.crypto] → Bot token C    │
+                          └────────────┬────────────────────┘
+                                       │
+                                       ▼
+                              main.rs (multi-agent launcher)
+                              Spawns N tokio tasks (1 per agent)
+                                       │
+                    ┌──────────────────┼──────────────────┐
+                    ▼                  ▼                  ▼
+              run_agent_loop()   run_agent_loop()   run_agent_loop()
+              (senku)            (thalos)            (crypto)
+              Own DB, own        Own DB, own         Own DB, own
+              WorkerRegistry     WorkerRegistry      WorkerRegistry
+                    │
+                    ▼
+Telegram  ──getUpdates──▶  Polling loop
                               │
                     ┌─────────┼──────────┐
                     ▼         ▼          ▼
@@ -44,14 +63,18 @@ Telegram  ──getUpdates──▶  main.rs (poller + callback handler)
               → inline keyboards
 ```
 
+**Multi-agent mode**: When `agents.toml` exists, each `[agent.NAME]` spawns an independent polling loop with its own `BotCore`, `WorkerRegistry`, `ThreadStore`, and bot identity. No shared state between agents. Falls back to single-agent `.env` mode if no `agents.toml` found.
+
 ## 3. Source Files
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Entry point: long-polling, message extraction, access control, callback query handler |
+| `src/main.rs` | Entry point: multi-agent launcher, polling loops, group chat routing, callback handler |
 | `src/bot.rs` | Core: `process_task()`, `run_user_prompt()`, `execute_engine_stream()`, keyboards, Telegram helpers |
 | `src/commands.rs` | Slash command handlers: `/start`, `/help`, `/new`, `/resume`, `/clear`, `/cd`, `/status`, `/context`, `/mcp`, `/skills`, `/tasks`, `/mode` |
 | `src/config.rs` | `BotConfig` from env vars, claude/python binary resolution, tool list parsing |
+| `src/multi.rs` | Multi-agent TOML config loader: `agents.toml` parsing, env var expansion, defaults merging |
+| `src/menu.rs` | Persistent reply keyboard: command buttons, bot command registration |
 | `src/db.rs` | SQLite: `threads`, `runs`, `session_history` tables via sqlx |
 | `src/engine.rs` | `build_claude_command()`: args, stdin piping, session resume, tool allowlist |
 | `src/format.rs` | Markdown-to-Telegram-HTML converter (pulldown-cmark), message splitting |
@@ -60,6 +83,7 @@ Telegram  ──getUpdates──▶  main.rs (poller + callback handler)
 | `src/voice.rs` | `download_voice()`, `download_photo()`, `VoiceTranscriber` (persistent sst.py server) |
 | `src/worker.rs` | `ThreadWorker` (per-thread task queue), `WorkerRegistry` (HashMap of workers) |
 | `menubar/NitroBar.swift` | macOS menu bar app: start/stop/restart daemon, auto-start toggle, log viewer |
+| `agents.toml.example` | Documented multi-agent config template |
 
 ## 4. Key Types
 
@@ -98,15 +122,19 @@ struct ThreadState {
 ## 5. Features
 
 ### Core
+- **Multi-agent** — run N bots from single process via `agents.toml`, each with own workspace/DB/polling
+- **Group chat** — bots respond in groups, @mention routing, bot-to-bot turn limiting
 - **Telegram long-poll** (`getUpdates` with offset tracking, webhook cleared at startup)
 - **Callback query handler** for inline keyboard button presses
-- **Access control** via `ALLOWED_TELEGRAM_USER_IDS` allowlist
+- **Access control** via `allowed_user_ids` / `allowed_group_ids` allowlists
 - **Per-thread isolation** — one async worker queue per `chat:topic` key
 - **Sequential execution** — one active run per thread, additional messages queued
 - **Claude Code execution** — `claude -p -` with `stream-json` output, stdin prompt piping
 - **Session resume** — `--resume <session_id>` across messages
+- **Environment hardening** — `ANTHROPIC_API_KEY` stripped from subprocess env (uses Pro subscription)
 
 ### UI/UX
+- **Persistent reply keyboard** — one-tap command menu (New, Resume, Compact, Mode, Cancel, Restart)
 - **Animated braille spinner** during streaming (rotates every 0.7s)
 - **Tool activity strip** — real-time emoji strip showing Claude's tool usage (📖→✏️→🔨)
 - **Typing indicator** — "typing..." bubble, re-sent every 4s during execution

@@ -49,6 +49,11 @@ impl ThreadWorker {
         self.tx.send(task)
     }
 
+    /// Returns true if the worker's channel is still open (tokio task alive).
+    pub fn is_alive(&self) -> bool {
+        !self.tx.is_closed()
+    }
+
     pub async fn cancel_current(&self) -> bool {
         *self.cancel_requested.lock().await = true;
         let mut proc_guard = self.current_process.lock().await;
@@ -89,22 +94,41 @@ async fn worker_loop(
             *cancel_requested.lock().await = false;
         }
 
-        if let Err(e) = bot
-            .process_task(&thread_key, &task, &cancel_requested, &current_process)
-            .await
-        {
-            warn!(
-                thread_key = %thread_key,
-                error = %e,
-                "Task processing failed"
-            );
-            let _ = bot
-                .send_text(
-                    task.message.chat_id,
-                    task.message.thread_id,
-                    &format!("Internal error: {e}"),
-                )
-                .await;
+        // Spawn task processing in a separate tokio task so panics don't kill this worker
+        let bot_clone = bot.clone();
+        let tk = thread_key.clone();
+        let cr = cancel_requested.clone();
+        let cp = current_process.clone();
+        let chat_id = task.message.chat_id;
+        let tid = task.message.thread_id;
+
+        let result = tokio::task::spawn(async move {
+            bot_clone.process_task(&tk, &task, &cr, &cp).await
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                warn!(
+                    thread_key = %thread_key,
+                    error = %e,
+                    "Task processing failed"
+                );
+                let _ = bot
+                    .send_text(chat_id, tid, &format!("Internal error: {e}"))
+                    .await;
+            }
+            Err(e) => {
+                warn!(
+                    thread_key = %thread_key,
+                    error = %e,
+                    "Task panicked — worker recovered"
+                );
+                let _ = bot
+                    .send_text(chat_id, tid, "Internal error: task panicked (recovered)")
+                    .await;
+            }
         }
 
         {
@@ -133,7 +157,11 @@ impl WorkerRegistry {
     pub async fn get_or_create(&self, thread_key: &ThreadKey) -> Arc<ThreadWorker> {
         let mut workers = self.workers.lock().await;
         if let Some(worker) = workers.get(thread_key) {
-            return worker.clone();
+            if worker.is_alive() {
+                return worker.clone();
+            }
+            // Worker is dead (channel closed) — respawn it
+            warn!(thread_key = %thread_key, "Dead worker detected, respawning");
         }
 
         let worker = Arc::new(ThreadWorker::spawn(thread_key.clone(), self.bot.clone()));

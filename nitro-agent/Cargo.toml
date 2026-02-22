@@ -15,3 +15,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dotenvy = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 pulldown-cmark = "0.12"
+toml = "0.8"

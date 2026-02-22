@@ -1,0 +1,49 @@
+# NitroAgent Multi-Agent Configuration
+# ─────────────────────────────────────
+# Run multiple Telegram bots from a single NitroAgent process.
+# Each agent gets its own workspace, database, and polling loop.
+#
+# Setup:
+#   1. Create bots via @BotFather on Telegram
+#   2. Add tokens to .env: MY_BOT_TOKEN=xxx
+#   3. Copy this file to agents.toml
+#   4. Configure your agents below
+#   5. Run: cargo run --release (or ./target/release/nitro-agent)
+#
+# Token format: use ${ENV_VAR_NAME} to reference .env variables.
+# This keeps secrets out of this file (safe to commit).
+#
+# Paths auto-derived from agent name unless overridden:
+#   db_path   → ~/.nitro-agent/data/{agent_name}.db
+#   logs_root → ~/.nitro-agent/logs/{agent_name}/
+#   workspace → ~/.nitro-agent/workspaces/{agent_name}/
+
+# ── Shared defaults ──
+# Every agent inherits these. Override per-agent as needed.
+[defaults]
+allowed_user_ids = ""              # comma-separated Telegram user IDs
+default_engine = "claude"
+default_tool_mode = "safe"         # "safe" or "full"
+poll_timeout_seconds = 25
+stream_edit_interval_secs = 0.7
+max_runtime_seconds = 1200
+max_output_chars = 3500
+bot_to_bot_max_turns = 5           # 0 = unlimited bot-to-bot turns in groups
+claude_bin = "claude"
+claude_safe_allowed_tools = "Read,Edit,Bash"
+claude_full_allowed_tools = ""
+
+# ── Agents ──
+# Each [agent.NAME] defines a bot. NAME is used for DB/logs/workspace paths.
+
+[agent.my-assistant]
+telegram_bot_token = "${MY_BOT_TOKEN}"
+workspace_root = "/path/to/my/project"
+# allowed_group_ids = "-100123456789"   # optional: enable group chat
+
+# [agent.another-bot]
+# telegram_bot_token = "${ANOTHER_BOT_TOKEN}"
+# workspace_root = "/path/to/another/project"
+# default_tool_mode = "full"            # override default
+# allowed_user_ids = "123,456"          # override to restrict access
+# allowed_group_ids = "-100123456789"
